@@ -868,7 +868,7 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
   std::cout << "Construct the initial guess..." << std::endl;
   xu_vecs[0] << index_start_y, index_start_z, 0.0, 0.0;
   x_hat_vecs[0] << index_start_y, index_start_z;
-  for (int i = 1; i < num_constraints; ++i) {
+  for (int i = 1; i < num_constraints - 1; ++i) {
     const int index = key_frames_index[i];
     const int y_lb = key_frames[index].y_min_;
     const int y_ub = key_frames[index].y_max_;
@@ -880,10 +880,13 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
     xu_vecs[i - 1].block<2, 1>(2, 0) =
         xu_vecs[i].block<2, 1>(0, 0) - xu_vecs[i - 1].block<2, 1>(0, 0);
   }
+  xu_vecs[num_constraints - 1] << index_end_y, index_end_z, 0.0, 0.0;
+  xu_vecs[num_constraints - 2].block<2, 1>(2, 0) =
+      xu_vecs[num_constraints - 1].block<2, 1>(0, 0) -
+      xu_vecs[num_constraints - 2].block<2, 1>(0, 0);
   std::cout << "start ilqr optimization..." << std::endl;
   bool is_ilqr_success = false;
   float cost_sum = 0.0;
-  float last_cost_sum = cost_sum;
   float path_length = 0.0;
   float last_path_length = path_length;
   while (!is_ilqr_success) {
@@ -906,16 +909,18 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
           q = cost.second;
         } else {
           const int real_index = key_frames_index[k];
+          const float delta_x = key_frame_x[key_frames_index[k + 1]] -
+                                key_frame_x[key_frames_index[k]];
           const int y_lb = key_frames[real_index].y_min_;
           const int y_ub = key_frames[real_index].y_max_;
           const int y_id =
               std::clamp(static_cast<int>(xu_vecs[k](0)), y_lb, y_ub);
           RangeVoxel z_range;
           key_frames[real_index].GetRangeAtY(y_id, &z_range);
-          const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
-              GetCost(xu_vecs[k], y_lb, y_ub, z_range.min_, z_range.max_);
-          cost_sum +=
-              GetRealCost(xu_vecs[k], y_lb, y_ub, z_range.min_, z_range.max_);
+          const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost = GetCost(
+              xu_vecs[k], delta_x, y_lb, y_ub, z_range.min_, z_range.max_);
+          cost_sum += GetRealCost(xu_vecs[k], delta_x, y_lb, y_ub, z_range.min_,
+                                  z_range.max_);
           Q = cost.first + F.transpose() * V * F;
           q = cost.second + F.transpose() * v;
         }
@@ -933,8 +938,8 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
             K_mat.transpose() * Quu * K_mat;
         v = qx + Qxu * k_vec + K_mat.transpose() * qu +
             K_mat.transpose() * Quu * k_vec;
-        delta_V.first += k_vecs[k].transpose() * qu;
-        delta_V.second += 0.5 * k_vecs[k].transpose() * Quu * k_vecs[k];
+        delta_V.first += k_vec.transpose() * qu;
+        delta_V.second += 0.5 * k_vec.transpose() * Quu * k_vec;
       }
 
       float alpha = 1.0;
@@ -955,14 +960,16 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
           x_hat_vecs[k + 1] = F * xu_vecs[k];
           // Calculate the new cost.
           const int real_index = key_frames_index[k];
+          const float delta_x = key_frame_x[key_frames_index[k + 1]] -
+                                key_frame_x[key_frames_index[k]];
           const int y_lb = key_frames[real_index].y_min_;
           const int y_ub = key_frames[real_index].y_max_;
           const int y_id =
               std::clamp(static_cast<int>(xu_vecs[k](0)), y_lb, y_ub);
           RangeVoxel z_range;
           key_frames[real_index].GetRangeAtY(y_id, &z_range);
-          next_cost_sum +=
-              GetRealCost(xu_vecs[k], y_lb, y_ub, z_range.min_, z_range.max_);
+          next_cost_sum += GetRealCost(xu_vecs[k], delta_x, y_lb, y_ub,
+                                       z_range.min_, z_range.max_);
         }
         xu_vecs[num_constraints - 1].block<2, 1>(0, 0) =
             x_hat_vecs[num_constraints - 1];
@@ -1013,8 +1020,9 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
 }
 
 std::pair<Eigen::Matrix4f, Eigen::Vector4f>
-GridAstar::GetCost(const Eigen::Vector4f &xu, const float y_lb,
-                   const float y_ub, const float z_lb, const float z_ub) {
+GridAstar::GetCost(const Eigen::Vector4f &xu, const float x_delta,
+                   const float y_lb, const float y_ub, const float z_lb,
+                   const float z_ub) {
   float dcy = 0.0;
   float ddcy = 0.0;
   float dcz = 0.0;
@@ -1035,27 +1043,30 @@ GridAstar::GetCost(const Eigen::Vector4f &xu, const float y_lb,
     dcz = kBndWeight * (xu(1) - z_lb);
     ddcz = kBndWeight;
   }
+  const float control_weight = kWeight / std::max((std::fabs(x_delta)), 1.0f);
   std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost;
   // clang-format off
   cost.first << 
   ddcy, 0.0, 0.0, 0.0,
   0.0, ddcz, 0.0, 0.0,
-  0.0, 0.0, kWeight, 0.0, 
-  0.0, 0.0, 0.0, kWeight;
+  0.0, 0.0, control_weight, 0.0, 
+  0.0, 0.0, 0.0, control_weight;
   cost.second <<
   dcy,
   dcz,
-  kWeight * xu(2),
-  kWeight * xu(3);
+  control_weight * xu(2),
+  control_weight * xu(3);
   // clang-format on
   return cost;
 }
 
-float GridAstar::GetRealCost(const Eigen::Vector4f &xu, const float y_lb,
-                             const float y_ub, const float z_lb,
-                             const float z_ub) {
+float GridAstar::GetRealCost(const Eigen::Vector4f &xu, const float x_delta,
+                             const float y_lb, const float y_ub,
+                             const float z_lb, const float z_ub) {
   float real_cost = 0.0;
-  real_cost += kWeight * 0.5 * xu(2) * xu(2) + kWeight * 0.5 * xu(3) * xu(3);
+  const float control_weight = kWeight / std::max((std::fabs(x_delta)), 1.0f);
+  real_cost += control_weight * 0.5 * xu(2) * xu(2) +
+               control_weight * 0.5 * xu(3) * xu(3);
   if (xu(0) > y_ub) {
     const float delta_y_square = (xu(0) - y_ub) * (xu(0) - y_ub);
     real_cost += kBndWeight * 0.5 * delta_y_square;

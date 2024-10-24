@@ -169,10 +169,11 @@ public:
                         const Eigen::Vector3f &end_p);
 
   std::pair<Eigen::Matrix4f, Eigen::Vector4f>
-  GetCost(const Eigen::Vector4f &xu, const float y_lb, const float y_ub,
-          const float z_lb, const float z_ub);
-  float GetRealCost(const Eigen::Vector4f &xu, const float y_lb,
-                    const float y_ub, const float z_lb, const float z_ub);
+  GetCost(const Eigen::Vector4f &xu, const float x_delta, const float y_lb,
+          const float y_ub, const float z_lb, const float z_ub);
+  float GetRealCost(const Eigen::Vector4f &xu, const float x_delta,
+                    const float y_lb, const float y_ub, const float z_lb,
+                    const float z_ub);
   std::pair<Eigen::Matrix4f, Eigen::Vector4f>
   GetTermCost(const Eigen::Vector4f &xu, const float target_y,
               const float target_z);
