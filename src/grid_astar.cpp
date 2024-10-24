@@ -925,10 +925,10 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
         const Eigen::Matrix2f Quu = Q.block<2, 2>(2, 2);
         const Eigen::Vector2f qx = q.block<2, 1>(0, 0);
         const Eigen::Vector2f qu = q.block<2, 1>(2, 0);
-        const Eigen::Matrix2f K_mat = K_mats[k];
-        const Eigen::Vector2f k_vec = k_vecs[k];
         K_mats[k] = -Quu.inverse() * Qux;
         k_vecs[k] = -Quu.inverse() * qu;
+        const Eigen::Matrix2f K_mat = K_mats[k];
+        const Eigen::Vector2f k_vec = k_vecs[k];
         V = Qxx + Qxu * K_mat + K_mat.transpose() * Qux +
             K_mat.transpose() * Quu * K_mat;
         v = qx + Qxu * k_vec + K_mat.transpose() * qu +
