@@ -147,8 +147,15 @@ add_library(${PROJECT_NAME}_lib
   src/hastar.cpp
   src/astar.cpp
   src/octo_astar.cpp
+)
+
+add_library(${PROJECT_NAME}_block_lib
   src/grid_astar.cpp
   src/block.cpp
+)
+
+add_library(${PROJECT_NAME}_voronoi_lib
+  src/dynamicvoronoi.cpp
 )
 
 ## Add cmake target dependencies of the library
@@ -167,7 +174,12 @@ add_executable(map_merge src/map_merge.cpp)
 add_executable(frontier_test src/frontier_test.cpp)
 add_executable(octo_astar_test src/octo_astar_test.cpp)
 add_executable(grid_astar_test src/grid_astar_test.cpp)
+add_executable(block_astar_test src/block_astar_test.cpp)
+add_executable(building_block_astar_test src/building_block_astar_test.cpp)
 add_executable(create_map_test src/create_map_test.cpp)
+add_executable(create_s3dis_map_test src/create_s3dis_map_test.cpp)
+add_executable(create_building_test src/create_building_test.cpp)
+add_executable(example src/example.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -218,6 +230,21 @@ target_link_libraries(grid_astar_test
   ${catkin_LIBRARIES}
   ${PROJECT_NAME}_lib
   ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(block_astar_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(building_block_astar_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_block_lib
 )
 
 target_link_libraries(create_map_test
@@ -225,6 +252,15 @@ target_link_libraries(create_map_test
   ${PROJECT_NAME}_lib
   ${Boost_LIBRARIES}
   ${YAML_CPP_LIBRARIES}
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(create_s3dis_map_test
+  ${catkin_LIBRARIES}
+)
+
+target_link_libraries(create_building_test
+  ${catkin_LIBRARIES}
 )
 
 #############
