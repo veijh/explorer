@@ -152,6 +152,10 @@ public:
   GridAstar(const float min_x, const float max_x, const float min_y,
             const float max_y, const float min_z, const float max_z,
             const float resolution = 0.1);
+  GridAstar(const float min_x, const float max_x, const float min_y,
+            const float max_y, const float min_z, const float max_z,
+            const float resolution,
+            const std::vector<std::vector<std::vector<GridState>>> &grid_map);
   void UpdateFromMap(const octomap::OcTree *ocmap,
                      const octomap::point3d &bbx_min,
                      const octomap::point3d &bbx_max);

@@ -13,17 +13,20 @@ constexpr int kMapZSize = 8;
 constexpr int kMapYZSize = 128;
 constexpr int kMapXYZSize = 512;
 constexpr int kMergeBuffer = 5;
-constexpr int kFilterMinX = 4;
-constexpr int kFilterMinY = 4;
-constexpr int kFilterMinZ = 4;
-constexpr int kConnectivityMinY = 4;
-constexpr int kConnectivityMinZ = 4;
+constexpr int kFilterMinX = 2;
+constexpr int kFilterMinY = 2;
+constexpr int kFilterMinZ = 2;
+constexpr int kConnectivityMinY = 2;
+constexpr int kConnectivityMinZ = 2;
 constexpr int kMaxIteration = 100;
 constexpr float kConvergenceThreshold = 0.01;
 constexpr float kTermWeight = 100.0;
 constexpr float kBndWeight = 100.0;
 constexpr float kWeight = 0.2;
 constexpr int kMaxLineSearchIter = 10;
+constexpr int kMaxReplan = 1000;
+constexpr float kYBuffer = 3.0;
+constexpr float kZBuffer = 3.0;
 } // namespace
 
 const std::vector<Eigen::Vector3i> expand_offset = {
@@ -103,6 +106,13 @@ GridAstar::GridAstar(const float min_x, const float max_x, const float min_y,
       std::vector<std::vector<GridState>>(
           num_y_grid, std::vector<GridState>(num_z_grid, GridState::kUnknown)));
 }
+
+GridAstar::GridAstar(
+    const float min_x, const float max_x, const float min_y, const float max_y,
+    const float min_z, const float max_z, const float resolution,
+    const std::vector<std::vector<std::vector<GridState>>> &grid_map)
+    : min_x_(min_x), max_x_(max_x), min_y_(min_y), max_y_(max_y), min_z_(min_z),
+      max_z_(max_z), resolution_(resolution), grid_map_(grid_map) {}
 
 const std::vector<std::vector<std::vector<GridAstar::GridState>>> &
 GridAstar::grid_map() const {
@@ -370,6 +380,7 @@ std::vector<Block3D> GridAstar::Merge3DVoxelAlongX(
         const int plug_z_min = it->plug_.z_min_;
         const int plug_y_max = it->plug_.y_max_;
         const int plug_z_max = it->plug_.z_max_;
+        // Two voxels can be merged if their bounding boxes are similar.
         if (voxel_y_min_lb <= plug_y_min && plug_y_min <= voxel_y_min_ub &&
             voxel_z_min_lb <= plug_z_min && plug_z_min <= voxel_z_min_ub &&
             voxel_y_max_lb <= plug_y_max && plug_y_max <= voxel_y_max_ub &&
@@ -384,6 +395,8 @@ std::vector<Block3D> GridAstar::Merge3DVoxelAlongX(
           is_merged = true;
           break;
         }
+        // If two voxels can not be merged, which means they belong to different
+        // blocks, check if they are connected.
         const std::vector<Block2D> overlap_blocks =
             new_yz_voxel.GetOverlap(it->plug_);
         for (const Block2D &overlap_block : overlap_blocks) {
@@ -774,7 +787,8 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
       static_cast<int>(std::floor((end_p.z() - min_z_) / resolution_));
   // Determine the index of block in the vector according to the block_id.
   std::unordered_map<int, int> block_id_map;
-  for (int i = 0; i < merge_map_3d_.size(); ++i) {
+  const int num_blocks = merge_map_3d_.size();
+  for (int i = 0; i < num_blocks; ++i) {
     if (block_id_map.find(merge_map_3d_[i].block_id_) == block_id_map.end()) {
       block_id_map[merge_map_3d_[i].block_id_] = i;
     } else {
@@ -844,7 +858,7 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
   }
   // iLQR Path Optimization.
   const int num_key_frames = key_frames.size();
-  const int num_constraints = key_frames_index.size();
+  int num_constraints = key_frames_index.size();
   Eigen::Matrix<float, 2, 4> F;
   // clang-format off
   F <<
@@ -889,7 +903,8 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
   float cost_sum = 0.0;
   float path_length = 0.0;
   float last_path_length = path_length;
-  while (!is_ilqr_success) {
+  for (int replan = 0; !is_ilqr_success && replan < kMaxReplan; ++replan) {
+    std::cout << "replan: " << replan << std::endl;
     // Iteration Loop.
     for (int iter = 0; iter < kMaxIteration; ++iter) {
       Eigen::Matrix2f V;
@@ -917,10 +932,12 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
               std::clamp(static_cast<int>(xu_vecs[k](0)), y_lb, y_ub);
           RangeVoxel z_range;
           key_frames[real_index].GetRangeAtY(y_id, &z_range);
-          const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost = GetCost(
-              xu_vecs[k], delta_x, y_lb, y_ub, z_range.min_, z_range.max_);
-          cost_sum += GetRealCost(xu_vecs[k], delta_x, y_lb, y_ub, z_range.min_,
-                                  z_range.max_);
+          const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
+              GetCost(xu_vecs[k], delta_x, y_lb + kYBuffer, y_ub - kYBuffer,
+                      z_range.min_ + kZBuffer, z_range.max_ - kZBuffer);
+          cost_sum +=
+              GetRealCost(xu_vecs[k], delta_x, y_lb + kYBuffer, y_ub - kYBuffer,
+                          z_range.min_ + kZBuffer, z_range.max_ - kZBuffer);
           Q = cost.first + F.transpose() * V * F;
           q = cost.second + F.transpose() * v;
         }
@@ -968,8 +985,9 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
               std::clamp(static_cast<int>(xu_vecs[k](0)), y_lb, y_ub);
           RangeVoxel z_range;
           key_frames[real_index].GetRangeAtY(y_id, &z_range);
-          next_cost_sum += GetRealCost(xu_vecs[k], delta_x, y_lb, y_ub,
-                                       z_range.min_, z_range.max_);
+          next_cost_sum +=
+              GetRealCost(xu_vecs[k], delta_x, y_lb + kYBuffer, y_ub - kYBuffer,
+                          z_range.min_ + kZBuffer, z_range.max_ - kZBuffer);
         }
         xu_vecs[num_constraints - 1].block<2, 1>(0, 0) =
             x_hat_vecs[num_constraints - 1];
@@ -1003,8 +1021,79 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
       }
     }
     // Check if the path is feasible.
-    is_ilqr_success = true;
-    // Add extra constraints.
+    std::vector<int> unvalid_index;
+    unvalid_index.reserve(num_key_frames);
+    for (int check = 0; check < num_constraints - 1; ++check) {
+      // Index, not x.
+      const int start_index = key_frames_index[check];
+      const int target_index = key_frames_index[check + 1];
+      const Eigen::Vector4f start_xu = xu_vecs[check];
+      const Eigen::Vector4f target_xu = xu_vecs[check + 1];
+      const Eigen::Vector4f slope =
+          (target_xu - start_xu) / (target_index - start_index);
+      const Eigen::Vector4f bias =
+          (target_index * start_xu - start_index * target_xu) /
+          (target_index - start_index);
+      for (int index = start_index; index < target_index; ++index) {
+        const Block2D &block2d = key_frames[index];
+        const Eigen::Vector4f xu = slope * index + bias;
+        if (block2d.IsInBlock(xu(0), xu(1)) == false) {
+          unvalid_index.emplace_back(index);
+          // std::cout << "unvalid index: " << index << std::endl;
+        }
+      }
+    }
+    if (unvalid_index.empty()) {
+      is_ilqr_success = true;
+    } else {
+      // Add extra constraints.
+      int unvalid_start = unvalid_index[0];
+      const int num_unvalid = unvalid_index.size();
+      for (int i = 0; i < num_unvalid; ++i) {
+        if (i == num_unvalid - 1 ||
+            unvalid_index[i] + 1 != unvalid_index[i + 1]) {
+          const int unvalid_mid = (unvalid_start + unvalid_index[i]) / 2;
+          // Insert unvalid_mid to key_frames_index.
+          const int insert_iter = std::distance(
+              key_frames_index.begin(),
+              std::lower_bound(key_frames_index.begin(), key_frames_index.end(),
+                               unvalid_mid));
+          if (key_frames_index[insert_iter] != unvalid_mid) {
+            key_frames_index.emplace(key_frames_index.begin() + insert_iter,
+                                     unvalid_mid);
+            // Update xu_vecs.
+            const int y_lb = key_frames[unvalid_mid].y_min_;
+            const int y_ub = key_frames[unvalid_mid].y_max_;
+            const int y_initial = (y_lb + y_ub) / 2;
+            RangeVoxel z_range;
+            key_frames[unvalid_mid].GetRangeAtY(y_initial, &z_range);
+            const int z_initial = (z_range.min_ + z_range.max_) / 2;
+            Eigen::Vector4f new_xu_constraint;
+            new_xu_constraint.block<2, 1>(0, 0) << y_initial, z_initial;
+            new_xu_constraint.block<2, 1>(2, 0) =
+                xu_vecs[insert_iter].block<2, 1>(0, 0) -
+                new_xu_constraint.block<2, 1>(0, 0);
+            xu_vecs[insert_iter - 1].block<2, 1>(2, 0) =
+                new_xu_constraint.block<2, 1>(0, 0) -
+                xu_vecs[insert_iter - 1].block<2, 1>(0, 0);
+            xu_vecs.emplace(xu_vecs.begin() + insert_iter, new_xu_constraint);
+          }
+          // Update unvalid_start.
+          unvalid_start = unvalid_index[i + 1];
+        }
+      }
+
+      // Resize K_mats, k_vecs, x_hat_vecs.
+      const int num_new_constraints = key_frames_index.size();
+      if (num_new_constraints == num_constraints) {
+        is_ilqr_success = true;
+      } else {
+        K_mats.resize(num_new_constraints, Eigen::Matrix2f::Zero());
+        k_vecs.resize(num_new_constraints, Eigen::Vector2f::Zero());
+        x_hat_vecs.resize(num_new_constraints, Eigen::Vector2f::Zero());
+        num_constraints = num_new_constraints;
+      }
+    }
   }
 
   ilqr_path_.clear();

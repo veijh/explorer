@@ -70,14 +70,17 @@ std::vector<Block2D> Block2D::GetOverlap(const Block2D &block) const {
 }
 
 float Block2D::GetRoughDistance(const Block2D &block, const int delta_x) const {
-  std::vector<Block2D> overlapped_blocks = GetOverlap(block);
-  if (overlapped_blocks.empty()) {
-    int delta_y = 0.5 * (y_max_ + y_min_ - block.y_max_ - block.y_min_);
-    int delta_z = 0.5 * (z_max_ + z_min_ - block.z_max_ - block.z_min_);
-    return std::hypot(delta_x, delta_y, delta_z);
-  } else {
-    return std::abs(static_cast<float>(delta_x));
-  }
+  // std::vector<Block2D> overlapped_blocks = GetOverlap(block);
+  // if (overlapped_blocks.empty()) {
+  //   int delta_y = 0.5 * (y_max_ + y_min_ - block.y_max_ - block.y_min_);
+  //   int delta_z = 0.5 * (z_max_ + z_min_ - block.z_max_ - block.z_min_);
+  //   return std::hypot(delta_x, delta_y, delta_z);
+  // } else {
+  //   return std::abs(static_cast<float>(delta_x));
+  // }
+  int delta_y = 0.5 * (y_max_ + y_min_ - block.y_max_ - block.y_min_);
+  int delta_z = 0.5 * (z_max_ + z_min_ - block.z_max_ - block.z_min_);
+  return std::hypot(delta_x, delta_y, delta_z);
 }
 
 bool Block2D::GetRangeAtY(const int y, RangeVoxel *range) const {
