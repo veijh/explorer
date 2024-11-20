@@ -1,7 +1,7 @@
 #ifndef _PRIORITYQUEUE2_H_
 #define _PRIORITYQUEUE2_H_
 
-#include "point.h"
+#include "m3_explorer/point.h"
 #include <assert.h>
 #include <map>
 #include <queue>

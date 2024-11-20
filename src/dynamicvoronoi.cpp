@@ -1,7 +1,91 @@
-#include "dynamicvoronoi.h"
+#include "m3_explorer/dynamicvoronoi.h"
+#include "m3_explorer/time_track.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <math.h>
+#include <queue>
+#include <unordered_map>
+
+namespace {
+constexpr int kMaxIteration = 10000;
+constexpr float kConvergenceThreshold = 0.01;
+constexpr float kTermWeight = 100.0;
+constexpr float kBndWeight = 100.0;
+constexpr float kWeight = 0.2;
+constexpr int kMaxLineSearchIter = 10;
+constexpr int kMaxReplan = 1000;
+constexpr float kYBuffer = 3.0;
+constexpr float kZBuffer = 3.0;
+} // namespace
+
+VGraphNode::VGraphNode(const IntPoint &point) : point_(point) {}
+
+void VGraphNode::RemoveEdge(const int dest_id) {
+  edges_.erase(dest_id);
+  return;
+}
+
+void VGraph::AddOneWayEdge(const IntPoint &src, const IntPoint &dest,
+                           const float weight) {
+  // Skip self-loops.
+  if (src == dest) {
+    return;
+  }
+  // Check whether the nodes has been already in the graph.
+  if (node_id_.find(src) == node_id_.end()) {
+    nodes_.emplace_back(src);
+    node_id_[src] = nodes_.size() - 1;
+  }
+  if (node_id_.find(dest) == node_id_.end()) {
+    nodes_.emplace_back(dest);
+    node_id_[dest] = nodes_.size() - 1;
+  }
+  // Add the edge to the graph.
+  const int src_id = node_id_[src];
+  const int dest_id = node_id_[dest];
+  if (nodes_[src_id].edges_.find(dest_id) == nodes_[src_id].edges_.end()) {
+    nodes_[node_id_[src]].edges_[node_id_[dest]] = weight;
+  }
+}
+
+void VGraph::AddTwoWayEdge(const IntPoint &src, const IntPoint &dest,
+                           const float weight) {
+  // Skip self-loops.
+  if (src == dest) {
+    return;
+  }
+  // Check whether the nodes has been already in the graph.
+  if (node_id_.find(src) == node_id_.end()) {
+    nodes_.emplace_back(src);
+    node_id_[src] = nodes_.size() - 1;
+  }
+  if (node_id_.find(dest) == node_id_.end()) {
+    nodes_.emplace_back(dest);
+    node_id_[dest] = nodes_.size() - 1;
+  }
+  // Add the edge to the graph.
+  const int src_id = node_id_[src];
+  const int dest_id = node_id_[dest];
+  if (nodes_[src_id].edges_.find(dest_id) == nodes_[src_id].edges_.end()) {
+    nodes_[node_id_[src]].edges_[node_id_[dest]] = weight;
+  }
+  if (nodes_[dest_id].edges_.find(src_id) == nodes_[dest_id].edges_.end()) {
+    nodes_[node_id_[dest]].edges_[node_id_[src]] = weight;
+  }
+}
+
+bool VGraph::isNodeExist(const IntPoint &point) {
+  return node_id_.find(point) != node_id_.end();
+}
+
+NodeProperty::NodeProperty(const AstarState state, const float g_score,
+                           const float h_score, const int father_id)
+    : state_(state), g_score_(g_score), h_score_(h_score),
+      father_id_(father_id) {}
+
+QueueNode::QueueNode(const IntPoint &point, const float f_score)
+    : point_(point), f_score_(f_score) {}
 
 DynamicVoronoi::DynamicVoronoi() {
   sqrt2 = sqrt(2.0);
@@ -281,14 +365,21 @@ void DynamicVoronoi::update(bool updateRealDist) {
   }
 }
 
-float DynamicVoronoi::getDistance(int x, int y) {
+float DynamicVoronoi::getDistance(int x, int y) const {
   if ((x > 0) && (x < sizeX) && (y > 0) && (y < sizeY))
     return data[x][y].dist;
   else
-    return -INFINITY;
+    return INFINITY;
 }
 
-bool DynamicVoronoi::isVoronoi(int x, int y) {
+int DynamicVoronoi::getSquaredDistance(int x, int y) const {
+  if ((x > 0) && (x < sizeX) && (y > 0) && (y < sizeY))
+    return data[x][y].sqdist;
+  else
+    return INT_MAX;
+}
+
+bool DynamicVoronoi::isVoronoi(int x, int y) const {
   dataCell c = data[x][y];
   return (c.voronoi == free || c.voronoi == voronoiKeep);
 }
@@ -401,7 +492,7 @@ void DynamicVoronoi::reviveVoroNeighbors(int &x, int &y) {
   }
 }
 
-bool DynamicVoronoi::isOccupied(int x, int y) {
+bool DynamicVoronoi::isOccupied(int x, int y) const {
   dataCell c = data[x][y];
   return (c.obstX == x && c.obstY == y);
 }
@@ -427,9 +518,15 @@ void DynamicVoronoi::visualize(const char *filename) {
       if (alternativeDiagram != NULL &&
           (alternativeDiagram[x][y] == free ||
            alternativeDiagram[x][y] == voronoiKeep)) {
-        fputc(255, F);
-        fputc(0, F);
-        fputc(0, F);
+        if (getNumVoronoiNeighborsAlternative(x, y) > 2) {
+          fputc(0, F);
+          fputc(255, F);
+          fputc(0, F);
+        } else {
+          fputc(255, F);
+          fputc(0, F);
+          fputc(0, F);
+        }
       } else if (isVoronoi(x, y)) {
         fputc(0, F);
         fputc(0, F);
@@ -528,9 +625,8 @@ void DynamicVoronoi::prune() {
     INTPOINT p = sortedPruneQueue.pop();
     dataCell c = data[p.x][p.y];
     int v = c.voronoi;
-    if (v != freeQueued &&
-        v !=
-            voronoiRetry) { // || v>free || v==voronoiPrune || v==voronoiKeep) {
+    if (v != freeQueued && v != voronoiRetry) { // || v>free || v==voronoiPrune
+                                                // || v==voronoiKeep) {
       //      assert(v!=retry);
       continue;
     }
@@ -690,7 +786,7 @@ bool DynamicVoronoi::markerMatchAlternative(int x, int y) {
   return true;
 }
 
-int DynamicVoronoi::getNumVoronoiNeighborsAlternative(int x, int y) {
+int DynamicVoronoi::getNumVoronoiNeighborsAlternative(int x, int y) const {
   int count = 0;
   for (int dx = -1; dx <= 1; dx++) {
     for (int dy = -1; dy <= 1; dy++) {
@@ -767,4 +863,519 @@ DynamicVoronoi::markerMatchResult DynamicVoronoi::markerMatch(int x, int y) {
   }
 
   return pruned;
+}
+
+const std::vector<IntPoint> neighbor_offsets = {
+    {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+
+std::vector<IntPoint> DynamicVoronoi::GetVoronoiNeighbors(const int x,
+                                                          const int y) {
+  std::vector<IntPoint> neighbors;
+  const int num_neighbors = neighbor_offsets.size();
+  for (int i = 0; i < num_neighbors; ++i) {
+    const IntPoint &offset = neighbor_offsets[i];
+    const int neighbor_x = x + offset.x;
+    const int neighbor_y = y + offset.y;
+    if (neighbor_x >= 0 && neighbor_x < sizeX && neighbor_y >= 0 &&
+        neighbor_y < sizeY) {
+      if (isVoronoi(neighbor_x, neighbor_y)) {
+        neighbors.emplace_back(neighbor_x, neighbor_y);
+      }
+    }
+  }
+  return neighbors;
+}
+
+int DynamicVoronoi::GetNumVoronoiNeighbors(const int x, const int y) const {
+  int num_voronoi_neighbors = 0;
+  const int num_neighbors = neighbor_offsets.size();
+  for (int i = 0; i < num_neighbors; ++i) {
+    const IntPoint &offset = neighbor_offsets[i];
+    const int neighbor_x = x + offset.x;
+    const int neighbor_y = y + offset.y;
+    if (neighbor_x >= 0 && neighbor_x < sizeX && neighbor_y >= 0 &&
+        neighbor_y < sizeY) {
+      if (isVoronoi(neighbor_x, neighbor_y)) {
+        ++num_voronoi_neighbors;
+      }
+    }
+  }
+  return num_voronoi_neighbors;
+}
+
+float DynamicVoronoi::GetUnionVolume(const IntPoint &p1,
+                                     const IntPoint &p2) const {
+  return 0.0;
+}
+
+void DynamicVoronoi::ConstructSparseGraph() {
+  // 0 represents in the queue, 1 represents visited.
+  std::unordered_map<IntPoint, int, IntPointHash> is_visited;
+  std::queue<IntPoint> cell_queue;
+  // Traverse all cells and add unvisited voronoi cells to the queue.
+  for (int x = 0; x < sizeX; ++x) {
+    for (int y = 0; y < sizeY; ++y) {
+      if (isVoronoi(x, y) &&
+          is_visited.find(IntPoint(x, y)) == is_visited.end() &&
+          GetNumVoronoiNeighbors(x, y) > 2) {
+        cell_queue.emplace(x, y);
+        while (!cell_queue.empty()) {
+          const IntPoint current_cell = cell_queue.front();
+          cell_queue.pop();
+          is_visited[current_cell] = true;
+          const std::vector<IntPoint> neighbors =
+              GetVoronoiNeighbors(current_cell.x, current_cell.y);
+          // Each neighbor indicates a direction of the edge.
+          for (const IntPoint &neighbor : neighbors) {
+            if (is_visited.find(neighbor) == is_visited.end()) {
+              bool is_expandable = true;
+              IntPoint check = neighbor;
+              while (is_expandable) {
+                std::vector<IntPoint> check_neighbors =
+                    GetVoronoiNeighbors(check.x, check.y);
+                // Find the key cell.
+                const int num_check_nbrs = check_neighbors.size();
+                if (num_check_nbrs > 2) {
+                  is_expandable = false;
+                } else if (num_check_nbrs == 2) {
+                  is_visited[check] = true;
+                  bool is_valid = false;
+                  for (const IntPoint &check_nbr : check_neighbors) {
+                    if (is_visited.find(check_nbr) == is_visited.end()) {
+                      is_valid = true;
+                      check = check_nbr;
+                      break;
+                    }
+                  }
+                  if (is_valid) {
+                  } else {
+                    is_expandable = false;
+                  }
+                } else {
+                  is_visited[check] = true;
+                  is_expandable = false;
+                }
+              }
+
+              // Add the edge between the key cell and the current cell.
+              if (GetNumVoronoiNeighbors(check.x, check.y) > 2 &&
+                  is_visited.find(check) == is_visited.end()) {
+                const float weight = std::hypot(current_cell.x - check.x,
+                                                current_cell.y - check.y);
+                cell_queue.emplace(check);
+                graph_.AddTwoWayEdge(current_cell, check, weight);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  std::cout << "Number of nodes in the graph: " << graph_.nodes_.size()
+            << std::endl;
+}
+
+std::vector<IntPoint> DynamicVoronoi::GetAstarPath(const IntPoint &start,
+                                                   const IntPoint &goal) {
+  TimeTrack track;
+  // Add the start and goal nodes to the graph.
+  const int num_nodes = graph_.nodes_.size();
+  for (int i = 0; i < num_nodes; ++i) {
+    const IntPoint point = graph_.nodes_[i].point_;
+    const int obstacle_distance = getSquaredDistance(point.x, point.y);
+    const int start_distance = GetSquaredDistanceBetween(point, start);
+    const int goal_distance = GetSquaredDistanceBetween(point, goal);
+    if (obstacle_distance >= start_distance) {
+      graph_.AddOneWayEdge(start, point, start_distance);
+    }
+    if (obstacle_distance >= goal_distance) {
+      graph_.AddTwoWayEdge(point, goal, goal_distance);
+    }
+  }
+  track.OutputPassingTime("Add start and goal nodes to the graph");
+
+  track.SetStartTime();
+  // Run A* to find the path.
+  std::priority_queue<QueueNode, std::vector<QueueNode>, QueueNodeCmp> astar_q;
+  std::unordered_map<IntPoint, NodeProperty, IntPointHash> node_properties;
+  node_properties[start] = NodeProperty(NodeProperty::AstarState::kOpen, 0.0,
+                                        GetHeuristic(start, goal), -1);
+  astar_q.push(QueueNode(start, node_properties[start].g_score_ +
+                                    node_properties[start].h_score_));
+  bool is_path_found = false;
+  while (!astar_q.empty()) {
+    // Selection.
+    const QueueNode current_node = astar_q.top();
+    astar_q.pop();
+    // Check if the current node is the goal.
+    if (current_node.point_ == goal) {
+      is_path_found = true;
+      break;
+    }
+    // Skip visited nodes due to the same
+    if (node_properties[current_node.point_].state_ ==
+        NodeProperty::AstarState::kClose) {
+      continue;
+    }
+    node_properties[current_node.point_].state_ =
+        NodeProperty::AstarState::kClose;
+    // Expansion.
+    if (graph_.node_id_.find(current_node.point_) == graph_.node_id_.end()) {
+      std::cout << "Node not found in graph !" << std::endl;
+      continue;
+    }
+    int current_node_id = graph_.node_id_[current_node.point_];
+    const auto &edges = graph_.nodes_[current_node_id].edges_;
+    for (const auto &edge : edges) {
+      const IntPoint neighbor = graph_.nodes_[edge.first].point_;
+      const float edge_weight = edge.second;
+      const float g_score =
+          node_properties[current_node.point_].g_score_ + edge_weight;
+      if (node_properties.find(neighbor) == node_properties.end()) {
+        const float h_score = GetHeuristic(neighbor, goal);
+        node_properties[neighbor] = NodeProperty(
+            NodeProperty::AstarState::kOpen, g_score, h_score, current_node_id);
+        astar_q.push(QueueNode(neighbor, g_score + h_score));
+      } else if (node_properties[neighbor].state_ ==
+                 NodeProperty::AstarState::kOpen) {
+        if (g_score < node_properties[neighbor].g_score_) {
+          node_properties[neighbor].g_score_ = g_score;
+          node_properties[neighbor].father_id_ = current_node_id;
+          astar_q.push(QueueNode(neighbor,
+                                 g_score + node_properties[neighbor].h_score_));
+        }
+      }
+    }
+  }
+  track.OutputPassingTime("Run A* to find the path");
+
+  track.SetStartTime();
+  std::vector<IntPoint> path;
+  if (is_path_found) {
+    std::cout << "Path found !" << std::endl;
+    IntPoint waypoint = goal;
+    int waypoint_id = graph_.node_id_[waypoint];
+    std::unordered_map<int, bool> visited;
+    while (waypoint_id != -1) {
+      if (visited.find(waypoint_id) == visited.end()) {
+        visited[waypoint_id] = true;
+        waypoint = graph_.nodes_[waypoint_id].point_;
+        path.push_back(waypoint);
+        waypoint_id = node_properties[waypoint].father_id_;
+      } else {
+        std::cout << waypoint_id << " already visited !" << std::endl;
+        std::cout << "Loop detected !" << std::endl;
+        break;
+      }
+    }
+    std::reverse(path.begin(), path.end());
+  } else {
+    std::cout << "No path found from " << start.x << "," << start.y << " to "
+              << goal.x << "," << goal.y << std::endl;
+  }
+  track.OutputPassingTime("Output the path");
+  // Remove the start and goal nodes from the graph.
+  // Remove last two nodes in the graph.
+  for (int i = 0; i < 2; ++i) {
+    VGraphNode node = graph_.nodes_.back();
+    const int node_id = graph_.node_id_[node.point_];
+    graph_.nodes_.pop_back();
+    for (const auto &edge : node.edges_) {
+      const int dest_id = edge.first;
+      graph_.nodes_[dest_id].edges_.erase(node_id);
+    }
+  }
+  graph_.node_id_.erase(start);
+  graph_.node_id_.erase(goal);
+  return path;
+}
+
+std::vector<IntPoint>
+DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
+  std::vector<IntPoint> ilqr_path;
+  if (path.empty()) {
+    return ilqr_path;
+  }
+  // Construct the constraints.
+  const int num_bubbles = path.size() - 2;
+  std::vector<IntPoint> bubbles(path.begin() + 1, path.end() - 1);
+  std::vector<float> radius;
+  radius.reserve(num_bubbles);
+  for (int i = 0; i < num_bubbles; ++i) {
+    radius.emplace_back(getDistance(bubbles[i].x, bubbles[i].y));
+  }
+  // iLQR Path Optimization.
+  const int num_steps = path.size() - 1;
+  Eigen::Matrix<float, 2, 4> F;
+  // clang-format off
+  F <<
+  1.0, 0.0, 1.0, 0.0,
+  0.0, 1.0, 0.0, 1.0;
+  // clang-format on
+  std::vector<Eigen::Matrix2f> K_mats;
+  K_mats.reserve(num_steps);
+  K_mats.resize(num_steps, Eigen::Matrix2f::Zero());
+  std::vector<Eigen::Vector2f> k_vecs(num_steps, Eigen::Vector2f::Zero());
+  k_vecs.reserve(num_steps);
+  k_vecs.resize(num_steps, Eigen::Vector2f::Zero());
+  std::vector<Eigen::Vector4f> xu_vecs(num_steps, Eigen::Vector4f::Zero());
+  xu_vecs.reserve(num_steps);
+  xu_vecs.resize(num_steps, Eigen::Vector4f::Zero());
+  std::vector<Eigen::Vector2f> x_hat_vecs(num_steps, Eigen::Vector2f::Zero());
+  x_hat_vecs.reserve(num_steps);
+  x_hat_vecs.resize(num_steps, Eigen::Vector2f::Zero());
+  // Construct the initial guess.
+  std::cout << "Construct the initial guess..." << std::endl;
+  const IntPoint start = path.front();
+  const IntPoint goal = path.back();
+  xu_vecs[0] << start.x, start.y, 0.0, 0.0;
+  x_hat_vecs[0] << start.x, start.y;
+  for (int i = 1; i < num_steps - 1; ++i) {
+    const float delta_c = GetDistanceBetween(bubbles[i - 1], bubbles[i]);
+    const float dist = (radius[i - 1] * radius[i - 1] - radius[i] * radius[i] +
+                        delta_c * delta_c) /
+                       (2.0 * delta_c);
+    const float x_initial =
+        bubbles[i - 1].x + dist / delta_c * (bubbles[i].x - bubbles[i - 1].x);
+    const float y_initial =
+        bubbles[i - 1].y + dist / delta_c * (bubbles[i].y - bubbles[i - 1].y);
+    xu_vecs[i].block<2, 1>(0, 0) << x_initial, y_initial;
+    xu_vecs[i - 1].block<2, 1>(2, 0) =
+        xu_vecs[i].block<2, 1>(0, 0) - xu_vecs[i - 1].block<2, 1>(0, 0);
+  }
+  xu_vecs[num_steps - 1] << goal.x, goal.y, 0.0, 0.0;
+  xu_vecs[num_steps - 2].block<2, 1>(2, 0) =
+      xu_vecs[num_steps - 1].block<2, 1>(0, 0) -
+      xu_vecs[num_steps - 2].block<2, 1>(0, 0);
+  std::cout << "start ilqr optimization..." << std::endl;
+  bool is_ilqr_success = false;
+  float cost_sum = 0.0;
+  float path_length = 0.0;
+  float last_path_length = path_length;
+  // Iteration Loop.
+  for (int iter = 0; iter < kMaxIteration; ++iter) {
+    Eigen::Matrix2f V;
+    Eigen::Vector2f v;
+    cost_sum = 0.0;
+    std::pair<float, float> delta_V(0.0, 0.0);
+    // Backward Pass.
+    for (int k = num_steps - 1; k >= 0; --k) {
+      Eigen::Matrix4f Q;
+      Eigen::Vector4f q;
+      // Cost can be calculated in parallel.
+      if (k == num_steps - 1) {
+        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
+            GetTermCost(xu_vecs[k], goal);
+        cost_sum += GetRealTermCost(xu_vecs[k], goal);
+        Q = cost.first;
+        q = cost.second;
+      } else if (k == 0) {
+        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
+            GetCost(xu_vecs[k], bubbles[k], radius[k], bubbles[k], radius[k]);
+        cost_sum += GetRealCost(xu_vecs[k], bubbles[k], radius[k], bubbles[k],
+                                radius[k]);
+        Q = cost.first + F.transpose() * V * F;
+        q = cost.second + F.transpose() * v;
+      } else {
+        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost = GetCost(
+            xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k], radius[k]);
+        cost_sum += GetRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1],
+                                bubbles[k], radius[k]);
+        Q = cost.first + F.transpose() * V * F;
+        q = cost.second + F.transpose() * v;
+      }
+      const Eigen::Matrix2f Qxx = Q.block<2, 2>(0, 0);
+      const Eigen::Matrix2f Qxu = Q.block<2, 2>(0, 2);
+      const Eigen::Matrix2f Qux = Q.block<2, 2>(2, 0);
+      const Eigen::Matrix2f Quu = Q.block<2, 2>(2, 2);
+      const Eigen::Vector2f qx = q.block<2, 1>(0, 0);
+      const Eigen::Vector2f qu = q.block<2, 1>(2, 0);
+      K_mats[k] = -Quu.inverse() * Qux;
+      k_vecs[k] = -Quu.inverse() * qu;
+      const Eigen::Matrix2f K_mat = K_mats[k];
+      const Eigen::Vector2f k_vec = k_vecs[k];
+      V = Qxx + Qxu * K_mat + K_mat.transpose() * Qux +
+          K_mat.transpose() * Quu * K_mat;
+      v = qx + Qxu * k_vec + K_mat.transpose() * qu +
+          K_mat.transpose() * Quu * k_vec;
+      delta_V.first += k_vec.transpose() * qu;
+      delta_V.second += 0.5 * k_vec.transpose() * Quu * k_vec;
+    }
+
+    float alpha = 1.0;
+    bool is_line_search_done = false;
+    int line_search_iter = 0;
+    // TODO: Parellel line search.
+    const std::vector<Eigen::Vector4f> cur_xu_vecs(xu_vecs);
+    while (!is_line_search_done && line_search_iter < kMaxLineSearchIter) {
+      ++line_search_iter;
+      // Forward Pass.
+      float next_cost_sum = 0.0;
+      for (int k = 0; k < num_steps - 1; ++k) {
+        const Eigen::Vector2f x = cur_xu_vecs[k].block<2, 1>(0, 0);
+        const Eigen::Vector2f u = cur_xu_vecs[k].block<2, 1>(2, 0);
+        xu_vecs[k].block<2, 1>(2, 0) =
+            K_mats[k] * (x_hat_vecs[k] - x) + alpha * k_vecs[k] + u;
+        xu_vecs[k].block<2, 1>(0, 0) = x_hat_vecs[k];
+        x_hat_vecs[k + 1] = F * xu_vecs[k];
+        // Calculate the new cost.
+        next_cost_sum += GetRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1],
+                                     bubbles[k], radius[k]);
+      }
+      xu_vecs[num_steps - 1].block<2, 1>(0, 0) = x_hat_vecs[num_steps - 1];
+      next_cost_sum += GetRealTermCost(xu_vecs[num_steps - 1], goal);
+      // Check if J satisfy line search condition.
+      const float ratio_decrease =
+          (next_cost_sum - cost_sum) /
+          (alpha * (delta_V.first + alpha * delta_V.second));
+      if (line_search_iter < kMaxLineSearchIter &&
+          (ratio_decrease <= 1e-4 || ratio_decrease >= 10)) {
+        alpha *= 0.5;
+      } else {
+        is_line_search_done = true;
+      }
+    }
+
+    // Calculate the path length.
+    path_length = 0.0;
+    for (int k = 0; k < num_steps - 1; ++k) {
+      path_length += xu_vecs[k].block<2, 1>(2, 0).norm();
+    }
+    // Terminate condition.
+    if (iter > 0 &&
+        std::fabs(path_length - last_path_length) < kConvergenceThreshold) {
+      std::cout << "Convergence reached !" << std::endl;
+      std::cout << "iter: " << iter << std::endl;
+      break;
+    } else {
+      last_path_length = path_length;
+    }
+  }
+  // Output the path.
+  ilqr_path.reserve(num_steps);
+  for (int i = 0; i < num_steps; ++i) {
+    const Eigen::Vector2f x = xu_vecs[i].block<2, 1>(0, 0);
+    ilqr_path.emplace_back(x(0), x(1));
+  }
+  return ilqr_path;
+}
+
+const VGraph &DynamicVoronoi::GetSparseGraph() const { return graph_; }
+
+bool DynamicVoronoi::isInSparseGraph(const IntPoint &point) const {
+  return graph_.node_id_.find(point) != graph_.node_id_.end();
+}
+
+float DynamicVoronoi::GetDistanceBetween(const IntPoint &p1,
+                                         const IntPoint &p2) const {
+  return std::hypot(p1.x - p2.x, p1.y - p2.y);
+}
+
+int DynamicVoronoi::GetSquaredDistanceBetween(const IntPoint &p1,
+                                              const IntPoint &p2) const {
+  const int dx = p1.x - p2.x;
+  const int dy = p1.y - p2.y;
+  return dx * dx + dy * dy;
+}
+
+// Calculate the heuristic value for A* search.
+float DynamicVoronoi::GetHeuristic(const IntPoint &start,
+                                   const IntPoint &goal) const {
+  return GetDistanceBetween(start, goal);
+}
+
+std::pair<Eigen::Matrix4f, Eigen::Vector4f>
+DynamicVoronoi::GetCost(const Eigen::Vector4f &xu, const IntPoint &bubble_1,
+                        const float radius_1, const IntPoint &bubble_2,
+                        const float radius_2) {
+  float dcx = 0.0;
+  float ddcx = 0.0;
+  float dcy = 0.0;
+  float ddcy = 0.0;
+  // Constraints on bubble 1.
+  const int dx_1 = xu(0) - bubble_1.x;
+  const int dy_1 = xu(1) - bubble_1.y;
+  if (dx_1 * dx_1 + dy_1 * dy_1 > radius_1 * radius_1) {
+    dcx += kBndWeight * dx_1;
+    dcy += kBndWeight * dy_1;
+    ddcx += kBndWeight;
+    ddcy += kBndWeight;
+  }
+  // Constraints on bubble 2.
+  const int dx_2 = xu(0) - bubble_2.x;
+  const int dy_2 = xu(1) - bubble_2.y;
+  if (dx_2 * dx_2 + dy_2 * dy_2 > radius_2 * radius_2) {
+    dcx += kBndWeight * dx_2;
+    dcy += kBndWeight * dy_2;
+    ddcx += kBndWeight;
+    ddcy += kBndWeight;
+  }
+  std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost;
+  // clang-format off
+  cost.first << 
+  ddcx, 0.0, 0.0, 0.0,
+  0.0, ddcy, 0.0, 0.0,
+  0.0, 0.0, kWeight, 0.0, 
+  0.0, 0.0, 0.0, kWeight;
+  cost.second <<
+  dcx,
+  dcy,
+  kWeight * xu(2),
+  kWeight * xu(3);
+  // clang-format on
+  return cost;
+}
+
+float DynamicVoronoi::GetRealCost(const Eigen::Vector4f &xu,
+                                  const IntPoint &bubble_1,
+                                  const float radius_1,
+                                  const IntPoint &bubble_2,
+                                  const float radius_2) {
+  float real_cost = 0.0;
+  real_cost += kWeight * 0.5 * xu(2) * xu(2) + kWeight * 0.5 * xu(3) * xu(3);
+  // Constraints on bubble 1.
+  const int dx_1 = xu(0) - bubble_1.x;
+  const int dy_1 = xu(1) - bubble_1.y;
+  if (dx_1 * dx_1 + dy_1 * dy_1 > radius_1 * radius_1) {
+    real_cost += kBndWeight * 0.5 * dx_1 * dx_1 +
+                 kBndWeight * 0.5 * dy_1 * dy_1 -
+                 kBndWeight * radius_1 * radius_1;
+  }
+  // Constraints on bubble 2.
+  const int dx_2 = xu(0) - bubble_2.x;
+  const int dy_2 = xu(1) - bubble_2.y;
+  if (dx_2 * dx_2 + dy_2 * dy_2 > radius_2 * radius_2) {
+    real_cost += kBndWeight * 0.5 * dx_2 * dx_2 +
+                 kBndWeight * 0.5 * dy_2 * dy_2 -
+                 kBndWeight * radius_2 * radius_2;
+  }
+  return real_cost;
+}
+
+std::pair<Eigen::Matrix4f, Eigen::Vector4f>
+DynamicVoronoi::GetTermCost(const Eigen::Vector4f &xu, const IntPoint &goal) {
+  std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost;
+  // clang-format off
+  cost.first << 
+  kTermWeight, 0.0, 0.0, 0.0,
+  0.0, kTermWeight, 0.0, 0.0,
+  0.0, 0.0, kWeight, 0.0,
+  0.0, 0.0, 0.0, kWeight;
+  cost.second << 
+  kTermWeight * (xu(0) - goal.x),
+  kTermWeight * (xu(1) - goal.y),
+  kWeight * xu(2),
+  kWeight * xu(3);
+  // clang-format on
+  return cost;
+}
+
+float DynamicVoronoi::GetRealTermCost(const Eigen::Vector4f &xu,
+                                      const IntPoint &goal) {
+  float real_cost = 0.0;
+  const float dx = xu(0) - goal.x;
+  const float dy = xu(1) - goal.y;
+  real_cost += kTermWeight * 0.5 * dx * dx + kTermWeight * 0.5 * dy * dy;
+  real_cost += kWeight * 0.5 * xu(2) * xu(2) + kWeight * 0.5 * xu(3) * xu(3);
+  return real_cost;
 }

@@ -179,7 +179,7 @@ add_executable(building_block_astar_test src/building_block_astar_test.cpp)
 add_executable(create_map_test src/create_map_test.cpp)
 add_executable(create_s3dis_map_test src/create_s3dis_map_test.cpp)
 add_executable(create_building_test src/create_building_test.cpp)
-add_executable(example src/example.cpp)
+add_executable(voronoi_test src/voronoi_test.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -245,6 +245,13 @@ target_link_libraries(building_block_astar_test
   ${PROJECT_NAME}_lib
   ${Boost_LIBRARIES}
   ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(voronoi_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_voronoi_lib
 )
 
 target_link_libraries(create_map_test
