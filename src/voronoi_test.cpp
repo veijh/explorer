@@ -303,14 +303,14 @@ int main(int argc, char *argv[]) {
     for (int office_id = 0; office_id < num_office; ++office_id) {
       create_office(grid, floor_surface,
                     floor_surface + floor_height - floor_thickness,
-                    Box2D(random_x(gen), random_y(gen), random_heading(gen),
+                    Box2D(random_x(gen), random_y(gen), 0.0,
                           random_office_length(gen), random_office_width(gen)),
                     wall_thickness);
     }
     // create obstacles
     for (int obstacle_id = 0; obstacle_id < num_obstacle; ++obstacle_id) {
       create_obstacle(grid, floor_surface, floor_surface + floor_height,
-                      Box2D(random_x(gen), random_y(gen), random_heading(gen),
+                      Box2D(random_x(gen), random_y(gen), 0.0,
                             random_obstacle_length(gen),
                             random_obstacle_width(gen)));
     }
@@ -415,7 +415,7 @@ int main(int argc, char *argv[]) {
   voronoi.visualize("pruned.ppm");
 
   track.SetStartTime();
-  voronoi.ConstructSparseGraph();
+  voronoi.ConstructSparseGraphBK();
   track.OutputPassingTime("ConstructSparseGraph");
   const VGraph &graph = voronoi.GetSparseGraph();
 
@@ -435,14 +435,6 @@ int main(int argc, char *argv[]) {
 
   const int num_nodes = graph.nodes_.size();
   for (int i = 0; i < num_nodes; ++i) {
-    if (key_cells_map.find(graph.nodes_[i].point_) == key_cells_map.end()) {
-      std::cout << "Error: key cell not found. " << graph.nodes_[i].point_.x
-                << " " << graph.nodes_[i].point_.y << std::endl;
-      std::cout << "Number of Voronoi neighbors: "
-                << voronoi.GetNumVoronoiNeighbors(graph.nodes_[i].point_.x,
-                                                  graph.nodes_[i].point_.y)
-                << std::endl;
-    }
     for (const auto &edge : graph.nodes_[i].edges_) {
       const IntPoint src_point = graph.nodes_[i].point_;
       const IntPoint dst_point = graph.nodes_[edge.first].point_;
@@ -581,6 +573,8 @@ int main(int argc, char *argv[]) {
       nh.advertise<visualization_msgs::Marker>("/ilqr_path", 10);
   ros::Publisher corridor_pub =
       nh.advertise<visualization_msgs::MarkerArray>("/corridor", 10);
+  ros::Publisher union_pub =
+      nh.advertise<visualization_msgs::MarkerArray>("/union", 10);
 
   visualization_msgs::Marker path_marker;
   path_marker.header.frame_id = "map";
@@ -624,6 +618,33 @@ int main(int argc, char *argv[]) {
   corridor.color.g = 1.0;
   corridor.color.b = 0.0;
 
+  visualization_msgs::MarkerArray unions;
+  visualization_msgs::Marker element;
+  element.header.frame_id = "map";
+  element.header.stamp = ros::Time::now();
+  element.ns = "element";
+  element.action = visualization_msgs::Marker::ADD;
+  element.pose.orientation.w = 1.0;
+  element.id = 0;
+  element.type = visualization_msgs::Marker::CYLINDER;
+  element.color.a = 0.6;
+  element.color.r = 0.0;
+  element.color.g = 1.0;
+  element.color.b = 0.0;
+  for (const auto &node : graph.nodes_) {
+    element.id = element.id + 1;
+    element.pose.position.x =
+        min_x + node.point_.x * resolution + 0.5 * resolution;
+    element.pose.position.y =
+        min_y + node.point_.y * resolution + 0.5 * resolution;
+    element.pose.position.z = min_z + 20 * resolution + 0.5 * resolution;
+    const float distance = voronoi.getDistance(node.point_.x, node.point_.y);
+    element.scale.x = 2 * distance * resolution;
+    element.scale.y = 2 * distance * resolution;
+    element.scale.z = 1.0 * resolution;
+    unions.markers.emplace_back(element);
+  }
+
   while (ros::ok()) {
     rate.sleep();
     ros::spinOnce();
@@ -632,6 +653,7 @@ int main(int argc, char *argv[]) {
     map2_pub.publish(cube_list2);
     app_pub.publish(cyliner_list);
     connect_pub.publish(connectivity);
+    union_pub.publish(unions);
 
     track.SetStartTime();
     std::vector<IntPoint> path =
@@ -654,7 +676,7 @@ int main(int argc, char *argv[]) {
           min_x + path[i].x * resolution + 0.5 * resolution;
       corridor.pose.position.y =
           min_y + path[i].y * resolution + 0.5 * resolution;
-      corridor.pose.position.z = min_z + 25 * resolution + 0.5 * resolution;
+      corridor.pose.position.z = min_z + 20 * resolution + 0.5 * resolution;
       const float distance = voronoi.getDistance(path[i].x, path[i].y);
       corridor.scale.x = 2 * distance * resolution;
       corridor.scale.y = 2 * distance * resolution;

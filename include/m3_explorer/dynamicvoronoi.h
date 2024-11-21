@@ -14,8 +14,8 @@ struct IntPointHash {
   size_t operator()(const IntPoint &point) const {
     // x max_range: [0, 1023], 10 bit
     // y max_range: [0, 1023], 10 bit
-    const int x0 = point.x << 15;
-    const int y0 = point.y << 5;
+    const int x0 = point.x << 16;
+    const int y0 = point.y << 0;
     const int hash_value = x0 | y0;
     return std::hash<int>()(hash_value);
   }
@@ -129,6 +129,7 @@ public:
   float GetUnionVolume(const IntPoint &p1, const IntPoint &p2) const;
   // Generate sparse graph.
   void ConstructSparseGraph();
+  void ConstructSparseGraphBK();
   //
   std::vector<IntPoint> GetAstarPath(const IntPoint &start,
                                      const IntPoint &goal);

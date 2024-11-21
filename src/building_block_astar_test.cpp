@@ -247,7 +247,7 @@ void create_stair(
 }
 
 int main(int argc, char **argv) {
-  ros::init(argc, argv, "block_astar_test");
+  ros::init(argc, argv, "building_block_astar_test");
   ros::NodeHandle nh("");
 
   ros::Rate rate(1);
