@@ -8,15 +8,12 @@
 #include <unordered_map>
 
 namespace {
-constexpr int kMaxIteration = 10000;
+constexpr int kMaxIteration = 500;
 constexpr float kConvergenceThreshold = 0.05f;
-constexpr float kTermWeight = 100.0;
-constexpr float kBndWeight = 100.0;
-constexpr float kWeight = 0.2;
+constexpr float kTermWeight = 1000.0;
+constexpr float kBndWeight = 1000.0;
+constexpr float kWeight = 100.0;
 constexpr int kMaxLineSearchIter = 10;
-constexpr int kMaxReplan = 1000;
-constexpr float kYBuffer = 3.0;
-constexpr float kZBuffer = 3.0;
 } // namespace
 
 VGraphNode::VGraphNode(const IntPoint &point) : point_(point) {}
@@ -1151,6 +1148,16 @@ std::vector<IntPoint> DynamicVoronoi::GetAstarPath(const IntPoint &start,
   }
   graph_.node_id_.erase(start);
   graph_.node_id_.erase(goal);
+  // Output the length of the path.
+  if (is_path_found) {
+    float len = 0.0f;
+    const int num_path_points = path.size();
+    for (int i = 0; i < num_path_points - 1; ++i) {
+      const float dist = GetDistanceBetween(path[i], path[i + 1]);
+      len += dist;
+    }
+    std::cout << "Path length: " << len << std::endl;
+  }
   return path;
 }
 
@@ -1177,18 +1184,14 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
   1.0f, 0.0f, 1.0f, 0.0f,
   0.0f, 1.0f, 0.0f, 1.0f;
   // clang-format on
-  std::vector<Eigen::Matrix2f> K_mats;
-  K_mats.reserve(num_steps);
-  K_mats.resize(num_steps, Eigen::Matrix2f::Zero());
+  std::vector<Eigen::Matrix2f> K_mats(num_steps, Eigen::Matrix2f::Zero());
   std::vector<Eigen::Vector2f> k_vecs(num_steps, Eigen::Vector2f::Zero());
-  k_vecs.reserve(num_steps);
-  k_vecs.resize(num_steps, Eigen::Vector2f::Zero());
   std::vector<Eigen::Vector4f> xu_vecs(num_steps, Eigen::Vector4f::Zero());
-  xu_vecs.reserve(num_steps);
-  xu_vecs.resize(num_steps, Eigen::Vector4f::Zero());
   std::vector<Eigen::Vector2f> x_hat_vecs(num_steps, Eigen::Vector2f::Zero());
-  x_hat_vecs.reserve(num_steps);
-  x_hat_vecs.resize(num_steps, Eigen::Vector2f::Zero());
+  std::vector<Eigen::Vector2f> ov_center(num_bubbles - 1,
+                                         Eigen::Vector2f::Zero());
+  std::vector<float> coeff(num_steps, 0.0f);
+  track.OutputPassingTime("Initialize");
   // Construct the initial guess.
   std::cout << "Construct the initial guess..." << std::endl;
   const IntPoint start = path.front();
@@ -1197,9 +1200,9 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
   x_hat_vecs[0] << start.x, start.y;
   for (int i = 1; i < num_steps - 1; ++i) {
     const float delta_c = GetDistanceBetween(bubbles[i - 1], bubbles[i]);
-    const float dist = (radius[i - 1] * radius[i - 1] - radius[i] * radius[i] +
-                        delta_c * delta_c) /
-                       (2.0f * delta_c);
+    const float dist =
+        0.5f * (delta_c + (radius[i - 1] + radius[i]) *
+                              (radius[i - 1] - radius[i]) / delta_c);
     const float x_initial =
         bubbles[i - 1].x + dist / delta_c * (bubbles[i].x - bubbles[i - 1].x);
     const float y_initial =
@@ -1207,14 +1210,25 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
     xu_vecs[i].block<2, 1>(0, 0) << x_initial, y_initial;
     xu_vecs[i - 1].block<2, 1>(2, 0) =
         xu_vecs[i].block<2, 1>(0, 0) - xu_vecs[i - 1].block<2, 1>(0, 0);
+    ov_center[i - 1] << x_initial, y_initial;
   }
   xu_vecs[num_steps - 1] << goal.x, goal.y, 0.0f, 0.0f;
   xu_vecs[num_steps - 2].block<2, 1>(2, 0) =
       xu_vecs[num_steps - 1].block<2, 1>(0, 0) -
       xu_vecs[num_steps - 2].block<2, 1>(0, 0);
+
+  // Calculate the coefficents.
+  coeff[0] = (ov_center[0] - Eigen::Vector2f(start.x, start.y)).norm();
+  coeff[num_bubbles - 1] =
+      (ov_center[num_bubbles - 2] - Eigen::Vector2f(goal.x, goal.y)).norm();
+  for (int i = 0; i < num_bubbles - 2; ++i) {
+    coeff[i + 1] = (ov_center[i + 1] - ov_center[i]).norm();
+  }
+
   std::cout << "start ilqr optimization..." << std::endl;
   bool is_ilqr_success = false;
   float cost_sum = 0.0f;
+  float last_cost_sum = cost_sum;
   float path_length = 0.0f;
   float last_path_length = path_length;
   // Iteration Loop.
@@ -1224,6 +1238,7 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
     cost_sum = 0.0f;
     std::pair<float, float> delta_V(0.0f, 0.0f);
     // Backward Pass.
+    track.SetStartTime();
     for (int k = num_steps - 1; k >= 0; --k) {
       Eigen::Matrix4f Q;
       Eigen::Vector4f q;
@@ -1235,17 +1250,18 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
         Q = cost.first;
         q = cost.second;
       } else if (k == 0) {
-        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
-            GetCost(xu_vecs[k], bubbles[k], radius[k], bubbles[k], radius[k]);
+        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost = GetCost(
+            xu_vecs[k], bubbles[k], radius[k], bubbles[k], radius[k], coeff[k]);
         cost_sum += GetRealCost(xu_vecs[k], bubbles[k], radius[k], bubbles[k],
-                                radius[k]);
+                                radius[k], coeff[k]);
         Q = cost.first + F.transpose() * V * F;
         q = cost.second + F.transpose() * v;
       } else {
-        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost = GetCost(
-            xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k], radius[k]);
+        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
+            GetCost(xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k],
+                    radius[k], coeff[k]);
         cost_sum += GetRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1],
-                                bubbles[k], radius[k]);
+                                bubbles[k], radius[k], coeff[k]);
         Q = cost.first + F.transpose() * V * F;
         q = cost.second + F.transpose() * v;
       }
@@ -1266,7 +1282,9 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
       delta_V.first += k_vec.transpose() * qu;
       delta_V.second += 0.5f * k_vec.transpose() * Quu * k_vec;
     }
+    track.OutputPassingTime("Backward Pass");
 
+    track.SetStartTime();
     float alpha = 1.0f;
     bool is_line_search_done = false;
     int line_search_iter = 0;
@@ -1284,8 +1302,14 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
         xu_vecs[k].block<2, 1>(0, 0) = x_hat_vecs[k];
         x_hat_vecs[k + 1] = F * xu_vecs[k];
         // Calculate the new cost.
-        next_cost_sum += GetRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1],
-                                     bubbles[k], radius[k]);
+        if (k == 0) {
+          next_cost_sum += GetRealCost(xu_vecs[k], bubbles[k], radius[k],
+                                       bubbles[k], radius[k], coeff[k]);
+        } else {
+          next_cost_sum +=
+              GetRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k],
+                          radius[k], coeff[k]);
+        }
       }
       xu_vecs[num_steps - 1].block<2, 1>(0, 0) = x_hat_vecs[num_steps - 1];
       next_cost_sum += GetRealTermCost(xu_vecs[num_steps - 1], goal);
@@ -1300,6 +1324,7 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
         is_line_search_done = true;
       }
     }
+    track.OutputPassingTime("Forward Pass");
 
     // Calculate the path length.
     path_length = 0.0f;
@@ -1309,11 +1334,15 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
     // Terminate condition.
     if (iter > 0 &&
         std::fabs(path_length - last_path_length) < kConvergenceThreshold) {
-      std::cout << "Convergence reached !" << std::endl;
-      std::cout << "iter: " << iter << std::endl;
+      std::cout << "Convergence reached ! iter: " << iter
+                << " cost: " << cost_sum << " path_length: " << path_length
+                << std::endl;
       break;
     } else {
       last_path_length = path_length;
+      last_cost_sum = cost_sum;
+      // std::cout << "iter: " << iter << " cost: " << cost_sum
+      //           << " path_length: " << path_length << std::endl;
     }
   }
   // Output the path.
@@ -1352,7 +1381,7 @@ float DynamicVoronoi::GetHeuristic(const IntPoint &start,
 std::pair<Eigen::Matrix4f, Eigen::Vector4f>
 DynamicVoronoi::GetCost(const Eigen::Vector4f &xu, const IntPoint &bubble_1,
                         const float radius_1, const IntPoint &bubble_2,
-                        const float radius_2) {
+                        const float radius_2, const float coeff) {
   float dcx = 0.0;
   float ddcx = 0.0;
   float dcy = 0.0;
@@ -1380,13 +1409,13 @@ DynamicVoronoi::GetCost(const Eigen::Vector4f &xu, const IntPoint &bubble_1,
   cost.first << 
   ddcx, 0.0, 0.0, 0.0,
   0.0, ddcy, 0.0, 0.0,
-  0.0, 0.0, kWeight, 0.0, 
-  0.0, 0.0, 0.0, kWeight;
+  0.0, 0.0, kWeight / coeff, 0.0, 
+  0.0, 0.0, 0.0, kWeight / coeff;
   cost.second <<
   dcx,
   dcy,
-  kWeight * xu(2),
-  kWeight * xu(3);
+  kWeight / coeff * xu(2),
+  kWeight / coeff * xu(3);
   // clang-format on
   return cost;
 }
@@ -1395,16 +1424,17 @@ float DynamicVoronoi::GetRealCost(const Eigen::Vector4f &xu,
                                   const IntPoint &bubble_1,
                                   const float radius_1,
                                   const IntPoint &bubble_2,
-                                  const float radius_2) {
+                                  const float radius_2, const float coeff) {
   float real_cost = 0.0;
-  real_cost += kWeight * 0.5 * xu(2) * xu(2) + kWeight * 0.5 * xu(3) * xu(3);
+  real_cost += kWeight * 0.5 / coeff * xu(2) * xu(2) +
+               kWeight * 0.5 / coeff * xu(3) * xu(3);
   // Constraints on bubble 1.
   const int dx_1 = xu(0) - bubble_1.x;
   const int dy_1 = xu(1) - bubble_1.y;
   if (dx_1 * dx_1 + dy_1 * dy_1 > radius_1 * radius_1) {
     real_cost += kBndWeight * 0.5 * dx_1 * dx_1 +
                  kBndWeight * 0.5 * dy_1 * dy_1 -
-                 kBndWeight * radius_1 * radius_1;
+                 kBndWeight * 0.5 * radius_1 * radius_1;
   }
   // Constraints on bubble 2.
   const int dx_2 = xu(0) - bubble_2.x;
@@ -1412,7 +1442,7 @@ float DynamicVoronoi::GetRealCost(const Eigen::Vector4f &xu,
   if (dx_2 * dx_2 + dy_2 * dy_2 > radius_2 * radius_2) {
     real_cost += kBndWeight * 0.5 * dx_2 * dx_2 +
                  kBndWeight * 0.5 * dy_2 * dy_2 -
-                 kBndWeight * radius_2 * radius_2;
+                 kBndWeight * 0.5 * radius_2 * radius_2;
   }
   return real_cost;
 }

@@ -147,10 +147,11 @@ public:
   std::vector<IntPoint> GetiLQRPath(const std::vector<IntPoint> &path);
   std::pair<Eigen::Matrix4f, Eigen::Vector4f>
   GetCost(const Eigen::Vector4f &xu, const IntPoint &bubble_1,
-          const float radius_1, const IntPoint &bubble_2, const float radius_2);
+          const float radius_1, const IntPoint &bubble_2, const float radius_2,
+          const float coeff);
   float GetRealCost(const Eigen::Vector4f &xu, const IntPoint &bubble_1,
                     const float radius_1, const IntPoint &bubble_2,
-                    const float radius_2);
+                    const float radius_2, const float coeff);
   std::pair<Eigen::Matrix4f, Eigen::Vector4f>
   GetTermCost(const Eigen::Vector4f &xu, const IntPoint &goal);
   float GetRealTermCost(const Eigen::Vector4f &xu, const IntPoint &goal);
