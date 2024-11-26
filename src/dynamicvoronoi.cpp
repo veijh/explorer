@@ -1238,30 +1238,36 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
     cost_sum = 0.0f;
     std::pair<float, float> delta_V(0.0f, 0.0f);
     // Backward Pass.
-    track.SetStartTime();
+    // track.SetStartTime();
+    std::vector<std::pair<Eigen::Matrix4f, Eigen::Vector4f>> costs(
+        num_steps,
+        std::make_pair(Eigen::Matrix4f::Zero(), Eigen::Vector4f::Zero()));
+    // Cost can be calculated in parallel.
+    // Update: Actually, in this case, it is not worthwhile to parallelize the
+    // cost. Time is mainly spent in the calculation of V and v.
+    costs[0] = GetCost(xu_vecs[0], bubbles[0], radius[0], bubbles[0], radius[0],
+                       coeff[0]);
+    cost_sum += GetRealCost(xu_vecs[0], bubbles[0], radius[0], bubbles[0],
+                            radius[0], coeff[0]);
+    costs[num_steps - 1] = GetTermCost(xu_vecs[num_steps - 1], goal);
+    cost_sum += GetRealTermCost(xu_vecs[num_steps - 1], goal);
+    for (int k = 1; k < num_steps - 1; ++k) {
+      costs[k] = GetCost(xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k],
+                         radius[k], coeff[k]);
+      cost_sum += GetRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1],
+                              bubbles[k], radius[k], coeff[k]);
+    }
+
     for (int k = num_steps - 1; k >= 0; --k) {
       Eigen::Matrix4f Q;
       Eigen::Vector4f q;
-      // Cost can be calculated in parallel.
       if (k == num_steps - 1) {
-        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
-            GetTermCost(xu_vecs[k], goal);
-        cost_sum += GetRealTermCost(xu_vecs[k], goal);
+        // Terminal cost.
+        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost = costs[k];
         Q = cost.first;
         q = cost.second;
-      } else if (k == 0) {
-        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost = GetCost(
-            xu_vecs[k], bubbles[k], radius[k], bubbles[k], radius[k], coeff[k]);
-        cost_sum += GetRealCost(xu_vecs[k], bubbles[k], radius[k], bubbles[k],
-                                radius[k], coeff[k]);
-        Q = cost.first + F.transpose() * V * F;
-        q = cost.second + F.transpose() * v;
       } else {
-        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
-            GetCost(xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k],
-                    radius[k], coeff[k]);
-        cost_sum += GetRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1],
-                                bubbles[k], radius[k], coeff[k]);
+        const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost = costs[k];
         Q = cost.first + F.transpose() * V * F;
         q = cost.second + F.transpose() * v;
       }
@@ -1282,13 +1288,15 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
       delta_V.first += k_vec.transpose() * qu;
       delta_V.second += 0.5f * k_vec.transpose() * Quu * k_vec;
     }
-    track.OutputPassingTime("Backward Pass");
+    // track.OutputPassingTime("Backward Pass");
 
-    track.SetStartTime();
     float alpha = 1.0f;
     bool is_line_search_done = false;
     int line_search_iter = 0;
     // TODO: Parellel line search.
+    // Update: It is a pity that it is not worthwhile to parallelize the line
+    // search, too. The overhead of creating threads is too high.
+    // track.SetStartTime();
     const std::vector<Eigen::Vector4f> cur_xu_vecs(xu_vecs);
     while (!is_line_search_done && line_search_iter < kMaxLineSearchIter) {
       ++line_search_iter;
@@ -1324,7 +1332,7 @@ DynamicVoronoi::GetiLQRPath(const std::vector<IntPoint> &path) {
         is_line_search_done = true;
       }
     }
-    track.OutputPassingTime("Forward Pass");
+    // track.OutputPassingTime("Forward Pass");
 
     // Calculate the path length.
     path_length = 0.0f;
