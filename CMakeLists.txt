@@ -32,6 +32,8 @@ find_package(Boost REQUIRED)
 
 find_package(yaml-cpp REQUIRED)
 
+find_package(OpenMP REQUIRED)
+
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
 ## See http://ros.org/doc/api/catkin/html/user_guide/setup_dot_py.html
@@ -156,6 +158,7 @@ add_library(${PROJECT_NAME}_block_lib
 
 add_library(${PROJECT_NAME}_voronoi_lib
   src/dynamicvoronoi.cpp
+  src/dynamicvoronoi3D.cpp
 )
 
 ## Add cmake target dependencies of the library
@@ -180,6 +183,8 @@ add_executable(create_map_test src/create_map_test.cpp)
 add_executable(create_s3dis_map_test src/create_s3dis_map_test.cpp)
 add_executable(create_building_test src/create_building_test.cpp)
 add_executable(voronoi_test src/voronoi_test.cpp)
+add_executable(voronoi3D_test src/voronoi3D_test.cpp)
+add_executable(voronoi2DS_test src/voronoi2DS_test.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -252,6 +257,21 @@ target_link_libraries(voronoi_test
   ${PROJECT_NAME}_lib
   ${Boost_LIBRARIES}
   ${PROJECT_NAME}_voronoi_lib
+)
+
+target_link_libraries(voronoi3D_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_voronoi_lib
+)
+
+target_link_libraries(voronoi2DS_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_voronoi_lib
+  OpenMP::OpenMP_CXX
 )
 
 target_link_libraries(create_map_test

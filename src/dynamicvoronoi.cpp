@@ -11,9 +11,10 @@ namespace {
 constexpr int kMaxIteration = 500;
 constexpr float kConvergenceThreshold = 0.05f;
 constexpr float kTermWeight = 1000.0;
-constexpr float kBndWeight = 1000.0;
+constexpr float kBndWeight = 10000.0;
 constexpr float kWeight = 100.0;
 constexpr int kMaxLineSearchIter = 10;
+constexpr int kDeadEndThreshold = 5;
 } // namespace
 
 VGraphNode::VGraphNode(const IntPoint &point) : point_(point) {}
@@ -431,7 +432,7 @@ void DynamicVoronoi::checkVoro(int x, int y, int nx, int ny, dataCell &c,
                                dataCell &nc) {
 
   if ((c.sqdist > 1 || nc.sqdist > 1) && nc.obstX != invalidObstData) {
-    if (abs(c.obstX - nc.obstX) > 1 || abs(c.obstY - nc.obstY) > 1) {
+    if (abs(c.obstX - nc.obstX) > 10 || abs(c.obstY - nc.obstY) > 10) {
       // compute dist from x,y to obstacle of nx,ny
       int dxy_x = x - nc.obstX;
       int dxy_y = y - nc.obstY;
@@ -863,7 +864,7 @@ DynamicVoronoi::markerMatchResult DynamicVoronoi::markerMatch(int x, int y) {
 }
 
 const std::vector<IntPoint> neighbor_offsets = {
-    {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    {-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {-1, 1}, {1, -1}, {1, 1}};
 
 std::vector<IntPoint> DynamicVoronoi::GetVoronoiNeighbors(const int x,
                                                           const int y) {
@@ -973,8 +974,7 @@ void DynamicVoronoi::ConstructSparseGraph() {
 }
 
 void DynamicVoronoi::ConstructSparseGraphBK() {
-  // 0 represents in the queue, 1 represents visited.
-  std::unordered_map<IntPoint, int, IntPointHash> is_visited;
+  std::unordered_map<IntPoint, QueueState, IntPointHash> is_visited;
   std::queue<IntPoint> cell_queue;
   // Traverse all cells and add unvisited voronoi cells to the queue.
   for (int x = 0; x < sizeX; ++x) {
@@ -983,44 +983,38 @@ void DynamicVoronoi::ConstructSparseGraphBK() {
           is_visited.find(IntPoint(x, y)) == is_visited.end()) {
         cell_queue.emplace(x, y);
         while (!cell_queue.empty()) {
-          const IntPoint current_cell = cell_queue.front();
+          const IntPoint core = cell_queue.front();
           cell_queue.pop();
-          is_visited[current_cell] = true;
-          const std::vector<IntPoint> neighbors =
-              GetVoronoiNeighbors(current_cell.x, current_cell.y);
-          const float obstacle_dist =
-              getDistance(current_cell.x, current_cell.y);
+          is_visited[core] = kCellProcessed;
+          const float obstacle_dist = getDistance(core.x, core.y);
           std::queue<IntPoint> bfs_queue;
-          for (const IntPoint &neighbor : neighbors) {
-            if (is_visited.find(neighbor) == is_visited.end()) {
-              bfs_queue.emplace(neighbor);
-            }
-          }
+          bfs_queue.emplace(core);
           while (!bfs_queue.empty()) {
             const IntPoint point = bfs_queue.front();
             bfs_queue.pop();
-            const int neighbor_dist = GetDistanceBetween(current_cell, point);
-            if (neighbor_dist >= obstacle_dist) {
+            is_visited[point] = kProcessed;
+            const int p_to_core = GetDistanceBetween(core, point);
+            if (p_to_core >= obstacle_dist) {
               // Add the edge.
               cell_queue.emplace(point);
-              if (getDistance(point.x, point.y) > 5) {
-                graph_.AddTwoWayEdge(current_cell, point, neighbor_dist);
+              is_visited[point] = kCellQueue;
+              if (getDistance(point.x, point.y) >= kDeadEndThreshold) {
+                graph_.AddTwoWayEdge(core, point, p_to_core);
               }
             } else {
-              is_visited[point] = true;
               // Expansion.
               const std::vector<IntPoint> nbrs =
                   GetVoronoiNeighbors(point.x, point.y);
-              bool is_expandable = false;
               for (const IntPoint &nbr : nbrs) {
                 if (is_visited.find(nbr) == is_visited.end()) {
                   bfs_queue.emplace(nbr);
-                  is_expandable = true;
-                }
-              }
-              if (is_expandable == false) {
-                if (getDistance(point.x, point.y) > 5) {
-                  graph_.AddTwoWayEdge(current_cell, point, neighbor_dist);
+                  is_visited[nbr] = kBfsQueue;
+                } else if (is_visited[nbr] == kCellQueue ||
+                           is_visited[nbr] == kCellProcessed) {
+                  const float nbr_to_core = GetDistanceBetween(core, nbr);
+                  if (getDistance(nbr.x, nbr.y) >= kDeadEndThreshold) {
+                    graph_.AddTwoWayEdge(core, nbr, nbr_to_core);
+                  }
                 }
               }
             }

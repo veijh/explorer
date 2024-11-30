@@ -1,4 +1,4 @@
-#include "m3_explorer/dynamicvoronoi.h"
+#include "m3_explorer/dynamicvoronoi3D.h"
 #include "m3_explorer/grid_astar.h"
 #include "m3_explorer/time_track.hpp"
 #include <Eigen/Dense>
@@ -15,18 +15,18 @@
 #include <visualization_msgs/MarkerArray.h>
 
 namespace {
-const float min_x = -40.0;
-const float max_x = 40.0;
-const float min_y = -40.0;
-const float max_y = 40.0;
+const float min_x = -25.0;
+const float max_x = 25.0;
+const float min_y = -25.0;
+const float max_y = 25.0;
 const float resolution = 0.1;
 const int num_floors = 3;
 const int floor_height = 30;
 const int floor_thickness = 3;
-const int num_office = 5;
+const int num_office = 1;
 const int wall_thickness = 5;
 const int door_width = 15;
-const int num_obstacle = 50;
+const int num_obstacle = 5;
 const int num_stair = 2;
 const int stair_length = 50;
 const int stair_width = 50;
@@ -322,137 +322,6 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  visualization_msgs::MarkerArray cyliner_list;
-  visualization_msgs::Marker cyliner;
-  cyliner.header.frame_id = "map";
-  cyliner.header.stamp = ros::Time::now();
-  cyliner.ns = "cyliner";
-  cyliner.action = visualization_msgs::Marker::ADD;
-  cyliner.pose.orientation.w = 1.0;
-  cyliner.id = 0;
-  cyliner.type = visualization_msgs::Marker::CYLINDER;
-  cyliner.color.a = 0.95;
-  cyliner.color.r = 0.0;
-  cyliner.color.g = 1.0;
-  cyliner.color.b = 0.0;
-
-  bool doPrune = false;
-  bool doPruneAlternative = false;
-
-  // create the voronoi object and initialize it with the map
-  bool **grid_map_2d = new bool *[num_x_grid];
-  for (int i = 0; i < num_x_grid; ++i) {
-    grid_map_2d[i] = new bool[num_y_grid];
-    for (int j = 0; j < num_y_grid; ++j) {
-      if (i == 0 || i == num_x_grid - 1 || j == 0 || j == num_y_grid - 1) {
-        grid_map_2d[i][j] = true;
-        continue;
-      }
-      if (grid[i][j][25] == GridAstar::GridState::kOcc) {
-        grid_map_2d[i][j] = true;
-      } else {
-        grid_map_2d[i][j] = false;
-      }
-    }
-  }
-  DynamicVoronoi voronoi;
-  voronoi.initializeMap(num_x_grid, num_y_grid, grid_map_2d);
-  TimeTrack track;
-  voronoi.update(); // update distance map and Voronoi diagram
-  track.OutputPassingTime("Update");
-  int num_voronoi_cells = 0;
-  int num_free_cells = 0;
-  int num_key_voronoi_cells = 0;
-  for (int i = 0; i < num_x_grid; ++i) {
-    for (int j = 0; j < num_y_grid; ++j) {
-      if (voronoi.isVoronoi(i, j) == true) {
-        ++num_voronoi_cells;
-      }
-      if (voronoi.isOccupied(i, j) == false) {
-        ++num_free_cells;
-      }
-    }
-  }
-  std::cerr << "Generated " << num_voronoi_cells << " Voronoi cells. "
-            << num_free_cells << " free cells. " << num_key_voronoi_cells
-            << " key cells.\n";
-  voronoi.visualize("initial.ppm");
-
-  track.SetStartTime();
-  voronoi.prune(); // prune the Voronoi
-  track.OutputPassingTime("Prune");
-  num_voronoi_cells = 0;
-  num_free_cells = 0;
-  num_key_voronoi_cells = 0;
-  std::unordered_set<IntPoint, IntPointHash> key_cells_map;
-  for (int i = 0; i < num_x_grid; ++i) {
-    for (int j = 0; j < num_y_grid; ++j) {
-      if (voronoi.isVoronoi(i, j) == true) {
-        ++num_voronoi_cells;
-        std::vector<IntPoint> neighbors = voronoi.GetVoronoiNeighbors(i, j);
-        if (neighbors.size() > 2) {
-          ++num_key_voronoi_cells;
-          key_cells_map.insert(IntPoint(i, j));
-          cyliner.pose.position.x = min_x + i * resolution + 0.5 * resolution;
-          cyliner.pose.position.y = min_y + j * resolution + 0.5 * resolution;
-          cyliner.pose.position.z = min_z + 25 * resolution + 0.5 * resolution;
-          const float distance = voronoi.getDistance(i, j);
-          cyliner.scale.x = 2 * distance * resolution;
-          cyliner.scale.y = 2 * distance * resolution;
-          cyliner.scale.z = 1.0 * resolution;
-          cyliner.id = cyliner.id + 1;
-          cyliner_list.markers.emplace_back(cyliner);
-        }
-      }
-      if (voronoi.isOccupied(i, j) == false) {
-        ++num_free_cells;
-      }
-    }
-  }
-  std::cerr << "Pruned " << num_voronoi_cells << " Voronoi cells. "
-            << num_free_cells << " free cells. " << num_key_voronoi_cells
-            << " key cells.\n";
-  voronoi.visualize("pruned.ppm");
-
-  track.SetStartTime();
-  voronoi.ConstructSparseGraphBK();
-  track.OutputPassingTime("ConstructSparseGraph");
-  const VGraph &graph = voronoi.GetSparseGraph();
-
-  visualization_msgs::Marker connectivity;
-  connectivity.header.frame_id = "map";
-  connectivity.header.stamp = ros::Time::now();
-  connectivity.ns = "connectivity";
-  connectivity.action = visualization_msgs::Marker::ADD;
-  connectivity.pose.orientation.w = 1.0;
-  connectivity.id = 0;
-  connectivity.type = visualization_msgs::Marker::LINE_LIST;
-  connectivity.scale.x = 0.1;
-  connectivity.color.a = 1.0;
-  connectivity.color.r = 1.0;
-  connectivity.color.g = 0.0;
-  connectivity.color.b = 0.0;
-
-  const int num_nodes = graph.nodes_.size();
-  for (int i = 0; i < num_nodes; ++i) {
-    for (const auto &edge : graph.nodes_[i].edges_) {
-      const IntPoint src_point = graph.nodes_[i].point_;
-      const IntPoint dst_point = graph.nodes_[edge.first].point_;
-      connectivity.points.emplace_back();
-      connectivity.points.back().x =
-          min_x + src_point.x * resolution + 0.5 * resolution;
-      connectivity.points.back().y =
-          min_y + src_point.y * resolution + 0.5 * resolution;
-      connectivity.points.back().z = min_z + 25 * resolution + 0.5 * resolution;
-      connectivity.points.emplace_back();
-      connectivity.points.back().x =
-          min_x + dst_point.x * resolution + 0.5 * resolution;
-      connectivity.points.back().y =
-          min_y + dst_point.y * resolution + 0.5 * resolution;
-      connectivity.points.back().z = min_z + 25 * resolution + 0.5 * resolution;
-    }
-  }
-
   visualization_msgs::Marker cube_list0;
   cube_list0.header.frame_id = "map";
   cube_list0.header.stamp = ros::Time::now();
@@ -497,7 +366,6 @@ int main(int argc, char *argv[]) {
   cube_list1.scale.x = resolution * 0.95;
   cube_list1.scale.y = resolution * 0.95;
   cube_list1.scale.z = resolution * 0.95;
-
   if (num_floors > 1) {
     cube_list1.points.clear();
     cube_list1.colors.clear();
@@ -532,7 +400,6 @@ int main(int argc, char *argv[]) {
   cube_list2.scale.x = resolution * 0.95;
   cube_list2.scale.y = resolution * 0.95;
   cube_list2.scale.z = resolution * 0.95;
-
   if (num_floors > 2) {
     cube_list2.points.clear();
     cube_list2.colors.clear();
@@ -556,25 +423,114 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  ros::Publisher map0_pub =
-      nh.advertise<visualization_msgs::Marker>("/map0", 10);
-  ros::Publisher map1_pub =
-      nh.advertise<visualization_msgs::Marker>("/map1", 10);
-  ros::Publisher map2_pub =
-      nh.advertise<visualization_msgs::Marker>("/map2", 10);
+  visualization_msgs::Marker gvd_points;
+  gvd_points.header.frame_id = "map";
+  gvd_points.header.stamp = ros::Time::now();
+  gvd_points.ns = "gvd_points";
+  gvd_points.action = visualization_msgs::Marker::ADD;
+  gvd_points.pose.orientation.w = 1.0;
+  gvd_points.id = 0;
+  gvd_points.type = visualization_msgs::Marker::CUBE_LIST;
+  gvd_points.scale.x = resolution * 0.5;
+  gvd_points.scale.y = resolution * 0.5;
+  gvd_points.scale.z = resolution * 0.5;
+  gvd_points.color.a = 1.0;
+  gvd_points.color.r = 0.2;
+  gvd_points.color.g = 1.0;
+  gvd_points.color.b = 0.2;
 
-  ros::Publisher app_pub =
-      nh.advertise<visualization_msgs::MarkerArray>("/app", 10);
-  ros::Publisher connect_pub =
-      nh.advertise<visualization_msgs::Marker>("/connect", 10);
-  ros::Publisher path_pub =
-      nh.advertise<visualization_msgs::Marker>("/path", 10);
-  ros::Publisher ilqr_path_pub =
-      nh.advertise<visualization_msgs::Marker>("/ilqr_path", 10);
-  ros::Publisher corridor_pub =
-      nh.advertise<visualization_msgs::MarkerArray>("/corridor", 10);
-  ros::Publisher union_pub =
-      nh.advertise<visualization_msgs::MarkerArray>("/union", 10);
+  // create the voronoi object and initialize it with the map
+  bool ***grid_map_3d = new bool **[num_x_grid];
+  for (int i = 0; i < num_x_grid; ++i) {
+    grid_map_3d[i] = new bool *[num_y_grid];
+    for (int j = 0; j < num_y_grid; ++j) {
+      grid_map_3d[i][j] = new bool[num_z_grid];
+      for (int k = 0; k < num_z_grid; ++k) {
+        if (i == 0 || i == num_x_grid - 1 || j == 0 || j == num_y_grid - 1 ||
+            k == 0 || k == num_z_grid - 1) {
+          grid_map_3d[i][j][k] = true;
+          continue;
+        }
+        if (grid[i][j][k] == GridAstar::GridState::kOcc) {
+          grid_map_3d[i][j][k] = true;
+        } else {
+          grid_map_3d[i][j][k] = false;
+        }
+      }
+    }
+  }
+  DynamicVoronoi3D voronoi;
+  voronoi.initializeMap(num_x_grid, num_y_grid, num_z_grid, grid_map_3d);
+  TimeTrack track;
+  voronoi.update(); // update distance map and Voronoi diagram
+  track.OutputPassingTime("Update");
+  int num_voronoi_cells = 0;
+  int num_free_cells = 0;
+  int num_key_voronoi_cells = 0;
+  for (int i = 0; i < num_x_grid; ++i) {
+    for (int j = 0; j < num_y_grid; ++j) {
+      for (int k = 0; k < num_z_grid; ++k) {
+        if (voronoi.isVoronoi(i, j, k) == true) {
+          ++num_voronoi_cells;
+          // if (k < floor_height) {
+          gvd_points.points.emplace_back();
+          gvd_points.points.back().x =
+              min_x + i * resolution + 0.5 * resolution;
+          gvd_points.points.back().y =
+              min_y + j * resolution + 0.5 * resolution;
+          gvd_points.points.back().z =
+              min_z + k * resolution + 0.5 * resolution;
+          //}
+        }
+        if (voronoi.isOccupied(i, j, k) == false) {
+          ++num_free_cells;
+        }
+      }
+    }
+  }
+  std::cerr << "Generated " << num_voronoi_cells << " Voronoi cells. "
+            << num_free_cells << " free cells.\n";
+
+  track.SetStartTime();
+  voronoi.ConstructSparseGraphBK();
+  track.OutputPassingTime("ConstructSparseGraph");
+  const auto &graph = voronoi.GetSparseGraph();
+
+  visualization_msgs::Marker connectivity;
+  connectivity.header.frame_id = "map";
+  connectivity.header.stamp = ros::Time::now();
+  connectivity.ns = "connectivity";
+  connectivity.action = visualization_msgs::Marker::ADD;
+  connectivity.pose.orientation.w = 1.0;
+  connectivity.id = 0;
+  connectivity.type = visualization_msgs::Marker::LINE_LIST;
+  connectivity.scale.x = 0.01;
+  connectivity.color.a = 1.0;
+  connectivity.color.r = 1.0;
+  connectivity.color.g = 0.0;
+  connectivity.color.b = 0.0;
+
+  const int num_nodes = graph.nodes_.size();
+  for (int i = 0; i < num_nodes; ++i) {
+    for (const auto &edge : graph.nodes_[i].edges_) {
+      const IntPoint3D src_point = graph.nodes_[i].point_;
+      const IntPoint3D dst_point = graph.nodes_[edge.first].point_;
+      connectivity.points.emplace_back();
+      connectivity.points.back().x =
+          min_x + src_point.x * resolution + 0.5 * resolution;
+      connectivity.points.back().y =
+          min_y + src_point.y * resolution + 0.5 * resolution;
+      connectivity.points.back().z =
+          min_z + src_point.z * resolution + 0.5 * resolution;
+      connectivity.points.emplace_back();
+      connectivity.points.back().x =
+          min_x + dst_point.x * resolution + 0.5 * resolution;
+      connectivity.points.back().y =
+          min_y + dst_point.y * resolution + 0.5 * resolution;
+      connectivity.points.back().z =
+          min_z + dst_point.z * resolution + 0.5 * resolution;
+    }
+  }
 
   visualization_msgs::Marker path_marker;
   path_marker.header.frame_id = "map";
@@ -612,38 +568,27 @@ int main(int argc, char *argv[]) {
   corridor.action = visualization_msgs::Marker::ADD;
   corridor.pose.orientation.w = 1.0;
   corridor.id = 0;
-  corridor.type = visualization_msgs::Marker::CYLINDER;
+  corridor.type = visualization_msgs::Marker::SPHERE;
   corridor.color.a = 0.6;
   corridor.color.r = 0.0;
   corridor.color.g = 1.0;
   corridor.color.b = 0.0;
 
-  visualization_msgs::MarkerArray unions;
-  visualization_msgs::Marker element;
-  element.header.frame_id = "map";
-  element.header.stamp = ros::Time::now();
-  element.ns = "element";
-  element.action = visualization_msgs::Marker::ADD;
-  element.pose.orientation.w = 1.0;
-  element.id = 0;
-  element.type = visualization_msgs::Marker::CYLINDER;
-  element.color.a = 0.6;
-  element.color.r = 0.0;
-  element.color.g = 1.0;
-  element.color.b = 0.0;
-  for (const auto &node : graph.nodes_) {
-    element.id = element.id + 1;
-    element.pose.position.x =
-        min_x + node.point_.x * resolution + 0.5 * resolution;
-    element.pose.position.y =
-        min_y + node.point_.y * resolution + 0.5 * resolution;
-    element.pose.position.z = min_z + 20 * resolution + 0.5 * resolution;
-    const float distance = voronoi.getDistance(node.point_.x, node.point_.y);
-    element.scale.x = 2 * distance * resolution;
-    element.scale.y = 2 * distance * resolution;
-    element.scale.z = 1.0 * resolution;
-    unions.markers.emplace_back(element);
-  }
+  ros::Publisher map0_pub =
+      nh.advertise<visualization_msgs::Marker>("/map0", 10);
+  ros::Publisher map1_pub =
+      nh.advertise<visualization_msgs::Marker>("/map1", 10);
+  ros::Publisher map2_pub =
+      nh.advertise<visualization_msgs::Marker>("/map2", 10);
+  ros::Publisher gvd_pub = nh.advertise<visualization_msgs::Marker>("/gvd", 10);
+  ros::Publisher connect_pub =
+      nh.advertise<visualization_msgs::Marker>("/connect", 10);
+  ros::Publisher path_pub =
+      nh.advertise<visualization_msgs::Marker>("/path", 10);
+  ros::Publisher ilqr_path_pub =
+      nh.advertise<visualization_msgs::Marker>("/ilqr_path", 10);
+  ros::Publisher corridor_pub =
+      nh.advertise<visualization_msgs::MarkerArray>("/corridor", 10);
 
   while (ros::ok()) {
     rate.sleep();
@@ -651,43 +596,46 @@ int main(int argc, char *argv[]) {
     map0_pub.publish(cube_list0);
     map1_pub.publish(cube_list1);
     map2_pub.publish(cube_list2);
-    app_pub.publish(cyliner_list);
+    gvd_pub.publish(gvd_points);
     connect_pub.publish(connectivity);
-    union_pub.publish(unions);
 
+    const IntPoint3D start_point(25, 25, 15);
+    const IntPoint3D goal_point(25, 25, 75);
     track.SetStartTime();
-    std::vector<IntPoint> path =
-        voronoi.GetAstarPath(IntPoint(30, 30), IntPoint(600, 600));
+    auto path = voronoi.GetAstarPath(start_point, goal_point);
     track.OutputPassingTime("GetAstarPath");
 
-    corridors.markers.clear();
-    corridor.id = 0;
     const int num_path_points = path.size();
     path_marker.points.clear();
+    corridor.id = 0;
     for (int i = 0; i < num_path_points; ++i) {
       path_marker.points.emplace_back();
       path_marker.points.back().x =
           min_x + path[i].x * resolution + 0.5 * resolution;
       path_marker.points.back().y =
           min_y + path[i].y * resolution + 0.5 * resolution;
-      path_marker.points.back().z = min_z + 25 * resolution + 0.5 * resolution;
+      path_marker.points.back().z =
+          min_z + path[i].z * resolution + 0.5 * resolution;
       corridor.id = corridor.id + 1;
       corridor.pose.position.x =
           min_x + path[i].x * resolution + 0.5 * resolution;
       corridor.pose.position.y =
           min_y + path[i].y * resolution + 0.5 * resolution;
-      corridor.pose.position.z = min_z + 20 * resolution + 0.5 * resolution;
-      const float distance = voronoi.getDistance(path[i].x, path[i].y);
+      corridor.pose.position.z =
+          min_z + path[i].z * resolution + 0.5 * resolution;
+      const float distance =
+          voronoi.getDistance(path[i].x, path[i].y, path[i].z);
       corridor.scale.x = 2 * distance * resolution;
       corridor.scale.y = 2 * distance * resolution;
-      corridor.scale.z = 1.0 * resolution;
+      corridor.scale.z = 2 * distance * resolution;
       corridors.markers.emplace_back(corridor);
     }
     if (!path.empty()) {
       path_pub.publish(path_marker);
       corridor_pub.publish(corridors);
+
       track.SetStartTime();
-      std::vector<IntPoint> ilqr_path = voronoi.GetiLQRPath(path);
+      std::vector<IntPoint3D> ilqr_path = voronoi.GetiLQRPath(path);
       track.OutputPassingTime("GetiLQRPath");
 
       ilqr_path_marker.points.clear();
@@ -700,7 +648,7 @@ int main(int argc, char *argv[]) {
         ilqr_path_marker.points.back().y =
             min_y + ilqr_path[i].y * resolution + 0.5 * resolution;
         ilqr_path_marker.points.back().z =
-            min_z + 25 * resolution + 0.5 * resolution;
+            min_z + ilqr_path[i].z * resolution + 0.5 * resolution;
       }
       ilqr_path_pub.publish(ilqr_path_marker);
     }

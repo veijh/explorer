@@ -71,6 +71,8 @@ struct QueueNodeCmp {
 //! A DynamicVoronoi object computes and updates a distance map and Voronoi
 //! diagram.
 class DynamicVoronoi {
+private:
+  enum QueueState { kCellQueue = 0, kBfsQueue, kCellProcessed, kProcessed };
 
 public:
   DynamicVoronoi();
