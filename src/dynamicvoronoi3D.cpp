@@ -816,6 +816,8 @@ void DynamicVoronoi3D::ConstructSparseGraphBK() {
             const float obstacle_dist = getDistance(core.x, core.y, core.z);
             // Determine the new vertex candidates to add to the graph.
             std::queue<IntPoint3D> bfs_queue;
+            std::vector<std::pair<IntPoint3D, float>> candidates;
+            candidates.reserve(64);
             bfs_queue.emplace(core);
             while (!bfs_queue.empty()) {
               const IntPoint3D point = bfs_queue.front();
@@ -826,12 +828,9 @@ void DynamicVoronoi3D::ConstructSparseGraphBK() {
               const int p_to_core = GetDistanceBetween(core, point);
               if (p_to_core >= obstacle_dist) {
                 // Add the edge.
-                cell_queue.emplace(point);
-                is_visited[point] = kCellQueue;
-                if (getDistance(point.x, point.y, point.z) >=
-                    kDeadEndThreshold) {
-                  graph_.AddTwoWayEdge(core, point, p_to_core);
-                }
+                candidates.emplace_back(point,
+                                        getDistance(point.x, point.y, point.z));
+                is_visited[point] = kCandidate;
               } else {
                 // Expansion.
                 const std::vector<IntPoint3D> nbrs = GetVoronoiNeighbors(point);
@@ -849,7 +848,43 @@ void DynamicVoronoi3D::ConstructSparseGraphBK() {
                 }
               }
             }
-            // Add the edges to the graph.
+            // std::cout << "Adding " << candidates.size() << " candidates.\n";
+            const int num_candidates = candidates.size();
+            std::vector<float> candidate_dists(num_candidates);
+            // Sort the candidates by distance.
+            std::sort(candidates.begin(), candidates.end(),
+                      [](const std::pair<IntPoint3D, float> &lhs,
+                         const std::pair<IntPoint3D, float> &rhs) {
+                        return lhs.second > rhs.second;
+                      });
+            std::vector<int> is_selected(num_candidates, 0);
+            for (int i = 0; i < num_candidates; ++i) {
+              if (!is_selected[i]) {
+                is_selected[i] = 1;
+                const IntPoint3D candidate = candidates[i].first;
+                const float candidate_dist = candidates[i].second;
+                const float candidate_to_core =
+                    GetDistanceBetween(core, candidate);
+                if (candidate_dist >= kDeadEndThreshold) {
+                  graph_.AddTwoWayEdge(core, candidate, candidate_to_core);
+                  cell_queue.emplace(candidate);
+                  is_visited[candidate] = kCellQueue;
+                  for (int j = 0; j < num_candidates; ++j) {
+                    if (!is_selected[j]) {
+                      const IntPoint3D other_candidate = candidates[j].first;
+                      const float c_to_c =
+                          GetDistanceBetween(candidate, other_candidate);
+                      if (c_to_c < candidate_dist) {
+                        is_selected[j] = 1;
+                        is_visited[other_candidate] = kProcessed;
+                      }
+                    }
+                  }
+                } else {
+                  is_visited[candidate] = kProcessed;
+                }
+              }
+            }
           }
         }
       }
@@ -884,8 +919,9 @@ void DynamicVoronoi3D::SparseAddTwoWayEdge(const IntPoint3D &core,
   }
 }
 
-std::vector<IntPoint3D> DynamicVoronoi3D::GetAstarPath(const IntPoint3D &start,
-                                                       const IntPoint3D &goal) {
+AstarOutput DynamicVoronoi3D::GetAstarPath(const IntPoint3D &start,
+                                           const IntPoint3D &goal) {
+  AstarOutput output;
   TimeTrack track;
   // Add the start and goal nodes to the graph.
   const int num_nodes = graph_.nodes_.size();
@@ -962,11 +998,13 @@ std::vector<IntPoint3D> DynamicVoronoi3D::GetAstarPath(const IntPoint3D &start,
     }
   }
   track.OutputPassingTime("Run A* to find the path");
+  output.num_expansions = count;
   std::cout << "A* count: " << count << std::endl;
 
   track.SetStartTime();
   std::vector<IntPoint3D> path;
   if (is_path_found) {
+    output.success = true;
     std::cout << "Path found !" << std::endl;
     IntPoint3D waypoint = goal;
     int waypoint_id = graph_.node_id_[waypoint];
@@ -985,6 +1023,7 @@ std::vector<IntPoint3D> DynamicVoronoi3D::GetAstarPath(const IntPoint3D &start,
     }
     std::reverse(path.begin(), path.end());
   } else {
+    output.success = false;
     std::cout << "No path found from " << start.x << "," << start.y << " to "
               << goal.x << "," << goal.y << std::endl;
   }
@@ -1010,17 +1049,19 @@ std::vector<IntPoint3D> DynamicVoronoi3D::GetAstarPath(const IntPoint3D &start,
       const float dist = GetDistanceBetween(path[i], path[i + 1]);
       len += dist;
     }
+    output.path_length = len;
+    output.path = std::move(path);
     std::cout << "Path length: " << len << std::endl;
   }
-  return path;
+  return output;
 }
 
-std::vector<IntPoint3D>
-DynamicVoronoi3D::GetiLQRPath(const std::vector<IntPoint3D> &path) {
+iLQROutput DynamicVoronoi3D::GetiLQRPath(const std::vector<IntPoint3D> &path) {
+  iLQROutput output;
   TimeTrack track;
   std::vector<IntPoint3D> ilqr_path;
-  if (path.empty()) {
-    return ilqr_path;
+  if (path.empty() || path.size() < 2) {
+    return output;
   }
   // Construct the constraints.
   const int num_bubbles = path.size() - 2;
@@ -1209,6 +1250,8 @@ DynamicVoronoi3D::GetiLQRPath(const std::vector<IntPoint3D> &path) {
       std::cout << "Convergence reached ! iter: " << iter
                 << " cost: " << cost_sum << " path_length: " << path_length
                 << std::endl;
+      output.num_iter = iter;
+      output.path_length = path_length;
       break;
     } else {
       last_path_length = path_length;
@@ -1223,7 +1266,8 @@ DynamicVoronoi3D::GetiLQRPath(const std::vector<IntPoint3D> &path) {
     const Eigen::Vector3f x = xu_vecs[i].block<3, 1>(0, 0);
     ilqr_path.emplace_back(x(0), x(1), x(2));
   }
-  return ilqr_path;
+  output.path = std::move(ilqr_path);
+  return output;
 }
 
 const VGraph3D &DynamicVoronoi3D::GetSparseGraph() const { return graph_; }

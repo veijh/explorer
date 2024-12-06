@@ -70,11 +70,30 @@ struct QueueNodeCmp3D {
   }
 };
 
+struct AstarOutput {
+  std::vector<IntPoint3D> path;
+  int num_expansions;
+  float path_length;
+  bool success;
+};
+
+struct iLQROutput {
+  std::vector<IntPoint3D> path;
+  int num_iter;
+  float path_length;
+};
+
 //! A DynamicVoronoi3D object computes and updates a distance map and Voronoi
 //! diagram.
 class DynamicVoronoi3D {
 private:
-  enum QueueState { kCellQueue = 0, kBfsQueue, kCellProcessed, kProcessed };
+  enum QueueState {
+    kCellQueue = 0,
+    kBfsQueue,
+    kCandidate,
+    kCellProcessed,
+    kProcessed
+  };
 
 public:
   DynamicVoronoi3D();
@@ -138,8 +157,7 @@ public:
   void ConstructSparseGraph();
   void ConstructSparseGraphBK();
   //
-  std::vector<IntPoint3D> GetAstarPath(const IntPoint3D &start,
-                                       const IntPoint3D &goal);
+  AstarOutput GetAstarPath(const IntPoint3D &start, const IntPoint3D &goal);
   // Get sparse graph.
   const VGraph3D &GetSparseGraph() const;
   bool isInSparseGraph(const IntPoint3D &point) const;
@@ -152,7 +170,7 @@ public:
   float GetHeuristic(const IntPoint3D &start, const IntPoint3D &goal) const;
 
   // iLQR related methods.
-  std::vector<IntPoint3D> GetiLQRPath(const std::vector<IntPoint3D> &path);
+  iLQROutput GetiLQRPath(const std::vector<IntPoint3D> &path);
   std::pair<Eigen::Matrix<float, 6, 6>, Eigen::Matrix<float, 6, 1>>
   GetCost(const Eigen::Matrix<float, 6, 1> &xu, const IntPoint3D &bubble_1,
           const float radius_1, const IntPoint3D &bubble_2,

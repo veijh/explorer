@@ -264,6 +264,7 @@ target_link_libraries(voronoi3D_test
   ${PROJECT_NAME}_lib
   ${Boost_LIBRARIES}
   ${PROJECT_NAME}_voronoi_lib
+  ${PROJECT_NAME}_block_lib
 )
 
 target_link_libraries(voronoi2DS_test

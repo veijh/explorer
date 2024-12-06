@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <geometry_msgs/Point.h>
+#include <iomanip>
 #include <iostream>
 #include <random>
 #include <ros/ros.h>
@@ -23,14 +24,26 @@ const float resolution = 0.1;
 const int num_floors = 3;
 const int floor_height = 30;
 const int floor_thickness = 3;
-const int num_office = 1;
+const int num_office = 5;
 const int wall_thickness = 5;
-const int door_width = 15;
-const int num_obstacle = 5;
+const int door_width = 20;
+const int num_obstacle = 50;
 const int num_stair = 2;
 const int stair_length = 50;
 const int stair_width = 50;
 } // namespace
+
+std::string getTimestamp() {
+  // 获取当前时间
+  std::time_t now = std::time(nullptr);
+  std::tm *timeInfo = std::localtime(&now);
+
+  // 将时间格式化为字符串：年_月_日_时_分_秒
+  std::ostringstream timestamp;
+  timestamp << std::put_time(timeInfo, "%Y-%m-%d_%H-%M-%S");
+
+  return timestamp.str();
+}
 
 class Box2D {
 public:
@@ -255,6 +268,13 @@ int main(int argc, char *argv[]) {
 
   ros::Rate rate(1);
 
+  // 输出文件
+  std::string fileName = "output_" + getTimestamp() + ".txt";
+  std::ofstream outFile(fileName);
+  if (!outFile.is_open()) {
+    return -1;
+  }
+
   const float min_z = 0.0;
   const float max_z = (floor_height * num_floors + 1) * resolution;
 
@@ -287,12 +307,12 @@ int main(int argc, char *argv[]) {
   std::mt19937 gen(rd());
   std::uniform_int_distribution<> random_x(0, num_x_grid);
   std::uniform_int_distribution<> random_y(0, num_y_grid);
-  std::uniform_int_distribution<> random_office_length(50, 100);
-  std::uniform_int_distribution<> random_office_width(50, 100);
+  std::uniform_int_distribution<> random_office_length(30, 60);
+  std::uniform_int_distribution<> random_office_width(30, 60);
   std::uniform_real_distribution<> random_heading(0, M_PI);
-  std::uniform_int_distribution<> random_obstacle_length(3, 100);
+  std::uniform_int_distribution<> random_obstacle_length(3, 50);
   std::uniform_int_distribution<> random_obstacle_width(3, 10);
-  std::uniform_int_distribution<> random_obstacle_height(3, floor_height);
+  std::uniform_int_distribution<> random_obstacle_height(3, floor_height * 0.6);
 
   // create multiple floors
   for (int floor_id = 0; floor_id < num_floors; ++floor_id) {
@@ -309,7 +329,8 @@ int main(int argc, char *argv[]) {
     }
     // create obstacles
     for (int obstacle_id = 0; obstacle_id < num_obstacle; ++obstacle_id) {
-      create_obstacle(grid, floor_surface, floor_surface + floor_height,
+      const int obstacle_height = random_obstacle_height(gen);
+      create_obstacle(grid, floor_surface, floor_surface + obstacle_height,
                       Box2D(random_x(gen), random_y(gen), random_heading(gen),
                             random_obstacle_length(gen),
                             random_obstacle_width(gen)));
@@ -322,101 +343,40 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  visualization_msgs::Marker cube_list0;
-  cube_list0.header.frame_id = "map";
-  cube_list0.header.stamp = ros::Time::now();
-  cube_list0.ns = "cube_list0";
-  cube_list0.action = visualization_msgs::Marker::ADD;
-  cube_list0.pose.orientation.w = 1.0;
-  cube_list0.id = 0;
-  cube_list0.type = visualization_msgs::Marker::CUBE_LIST;
-  cube_list0.scale.x = resolution * 0.95;
-  cube_list0.scale.y = resolution * 0.95;
-  cube_list0.scale.z = resolution * 0.95;
+  GridAstar grid_astar(min_x, max_x, min_y, max_y, min_z, max_z, resolution,
+                       grid);
 
-  cube_list0.points.clear();
-  cube_list0.colors.clear();
-  for (int i = 0; i < num_x_grid; ++i) {
-    for (int j = 0; j < num_y_grid; ++j) {
-      for (int k = 0; k < floor_height; ++k) {
-        if (grid[i][j][k] == GridAstar::GridState::kOcc) {
-          geometry_msgs::Point grid_pos;
-          grid_pos.x = min_x + i * resolution + 0.5 * resolution;
-          grid_pos.y = min_y + j * resolution + 0.5 * resolution;
-          grid_pos.z = min_z + k * resolution + 0.5 * resolution;
-          cube_list0.points.emplace_back(grid_pos);
-          cube_list0.colors.emplace_back();
-          cube_list0.colors.back().a = a_grid[i][j][k];
-          cube_list0.colors.back().r = r_grid[i][j][k];
-          cube_list0.colors.back().g = g_grid[i][j][k];
-          cube_list0.colors.back().b = b_grid[i][j][k];
-        }
-      }
-    }
-  }
+  // Visualize the grids on different layers.
+  std::vector<visualization_msgs::Marker> cube_lists(num_floors);
+  for (int floor_iter = 0; floor_iter < num_floors; ++floor_iter) {
+    cube_lists[floor_iter].header.frame_id = "map";
+    cube_lists[floor_iter].header.stamp = ros::Time::now();
+    cube_lists[floor_iter].ns = "cube_list" + std::to_string(floor_iter);
+    cube_lists[floor_iter].action = visualization_msgs::Marker::ADD;
+    cube_lists[floor_iter].pose.orientation.w = 1.0;
+    cube_lists[floor_iter].id = 0;
+    cube_lists[floor_iter].type = visualization_msgs::Marker::CUBE_LIST;
+    cube_lists[floor_iter].scale.x = resolution * 0.95;
+    cube_lists[floor_iter].scale.y = resolution * 0.95;
+    cube_lists[floor_iter].scale.z = resolution * 0.95;
 
-  visualization_msgs::Marker cube_list1;
-  cube_list1.header.frame_id = "map";
-  cube_list1.header.stamp = ros::Time::now();
-  cube_list1.ns = "cube_list1";
-  cube_list1.action = visualization_msgs::Marker::ADD;
-  cube_list1.pose.orientation.w = 1.0;
-  cube_list1.id = 0;
-  cube_list1.type = visualization_msgs::Marker::CUBE_LIST;
-  cube_list1.scale.x = resolution * 0.95;
-  cube_list1.scale.y = resolution * 0.95;
-  cube_list1.scale.z = resolution * 0.95;
-  if (num_floors > 1) {
-    cube_list1.points.clear();
-    cube_list1.colors.clear();
+    cube_lists[floor_iter].points.clear();
+    cube_lists[floor_iter].colors.clear();
     for (int i = 0; i < num_x_grid; ++i) {
       for (int j = 0; j < num_y_grid; ++j) {
-        for (int k = floor_height; k < 2 * floor_height; ++k) {
+        for (int k = floor_iter * floor_height;
+             k < (floor_iter + 1) * floor_height; ++k) {
           if (grid[i][j][k] == GridAstar::GridState::kOcc) {
             geometry_msgs::Point grid_pos;
             grid_pos.x = min_x + i * resolution + 0.5 * resolution;
             grid_pos.y = min_y + j * resolution + 0.5 * resolution;
             grid_pos.z = min_z + k * resolution + 0.5 * resolution;
-            cube_list1.points.emplace_back(grid_pos);
-            cube_list1.colors.emplace_back();
-            cube_list1.colors.back().a = a_grid[i][j][k];
-            cube_list1.colors.back().r = r_grid[i][j][k];
-            cube_list1.colors.back().g = g_grid[i][j][k];
-            cube_list1.colors.back().b = b_grid[i][j][k];
-          }
-        }
-      }
-    }
-  }
-
-  visualization_msgs::Marker cube_list2;
-  cube_list2.header.frame_id = "map";
-  cube_list2.header.stamp = ros::Time::now();
-  cube_list2.ns = "cube_list2";
-  cube_list2.action = visualization_msgs::Marker::ADD;
-  cube_list2.pose.orientation.w = 1.0;
-  cube_list2.id = 0;
-  cube_list2.type = visualization_msgs::Marker::CUBE_LIST;
-  cube_list2.scale.x = resolution * 0.95;
-  cube_list2.scale.y = resolution * 0.95;
-  cube_list2.scale.z = resolution * 0.95;
-  if (num_floors > 2) {
-    cube_list2.points.clear();
-    cube_list2.colors.clear();
-    for (int i = 0; i < num_x_grid; ++i) {
-      for (int j = 0; j < num_y_grid; ++j) {
-        for (int k = 2 * floor_height; k < 3 * floor_height; ++k) {
-          if (grid[i][j][k] == GridAstar::GridState::kOcc) {
-            geometry_msgs::Point grid_pos;
-            grid_pos.x = min_x + i * resolution + 0.5 * resolution;
-            grid_pos.y = min_y + j * resolution + 0.5 * resolution;
-            grid_pos.z = min_z + k * resolution + 0.5 * resolution;
-            cube_list2.points.emplace_back(grid_pos);
-            cube_list2.colors.emplace_back();
-            cube_list2.colors.back().a = a_grid[i][j][k];
-            cube_list2.colors.back().r = r_grid[i][j][k];
-            cube_list2.colors.back().g = g_grid[i][j][k];
-            cube_list2.colors.back().b = b_grid[i][j][k];
+            cube_lists[floor_iter].points.emplace_back(grid_pos);
+            cube_lists[floor_iter].colors.emplace_back();
+            cube_lists[floor_iter].colors.back().a = a_grid[i][j][k];
+            cube_lists[floor_iter].colors.back().r = r_grid[i][j][k];
+            cube_lists[floor_iter].colors.back().g = g_grid[i][j][k];
+            cube_lists[floor_iter].colors.back().b = b_grid[i][j][k];
           }
         }
       }
@@ -463,7 +423,8 @@ int main(int argc, char *argv[]) {
   voronoi.initializeMap(num_x_grid, num_y_grid, num_z_grid, grid_map_3d);
   TimeTrack track;
   voronoi.update(); // update distance map and Voronoi diagram
-  track.OutputPassingTime("Update");
+  outFile << "Preprocess time, " << track.OutputPassingTime("Update")
+          << std::endl;
   int num_voronoi_cells = 0;
   int num_free_cells = 0;
   int num_key_voronoi_cells = 0;
@@ -493,8 +454,14 @@ int main(int argc, char *argv[]) {
 
   track.SetStartTime();
   voronoi.ConstructSparseGraphBK();
-  track.OutputPassingTime("ConstructSparseGraph");
+  outFile << "SSSC Graph, " << track.OutputPassingTime("ConstructSparseGraph")
+          << std::endl;
+
   const auto &graph = voronoi.GetSparseGraph();
+
+  outFile << "Free cells, " << num_free_cells << std::endl;
+  outFile << "Voronoi cells, " << num_voronoi_cells << std::endl;
+  outFile << "Num Sparse Graph Nodes, " << graph.nodes_.size() << std::endl;
 
   visualization_msgs::Marker connectivity;
   connectivity.header.frame_id = "map";
@@ -504,7 +471,7 @@ int main(int argc, char *argv[]) {
   connectivity.pose.orientation.w = 1.0;
   connectivity.id = 0;
   connectivity.type = visualization_msgs::Marker::LINE_LIST;
-  connectivity.scale.x = 0.01;
+  connectivity.scale.x = 0.05;
   connectivity.color.a = 1.0;
   connectivity.color.r = 1.0;
   connectivity.color.g = 0.0;
@@ -574,12 +541,21 @@ int main(int argc, char *argv[]) {
   corridor.color.g = 1.0;
   corridor.color.b = 0.0;
 
-  ros::Publisher map0_pub =
-      nh.advertise<visualization_msgs::Marker>("/map0", 10);
-  ros::Publisher map1_pub =
-      nh.advertise<visualization_msgs::Marker>("/map1", 10);
-  ros::Publisher map2_pub =
-      nh.advertise<visualization_msgs::Marker>("/map2", 10);
+  visualization_msgs::Marker waypoint;
+  waypoint.header.frame_id = "map";
+  waypoint.header.stamp = ros::Time::now();
+  waypoint.ns = "line_strip";
+  waypoint.action = visualization_msgs::Marker::ADD;
+  waypoint.scale.x = 0.1;
+  waypoint.pose.orientation.w = 1.0;
+  waypoint.id = 0;
+  waypoint.type = visualization_msgs::Marker::LINE_STRIP;
+
+  std::vector<ros::Publisher> maps_pub(num_floors);
+  for (int floor_iter = 0; floor_iter < num_floors; ++floor_iter) {
+    maps_pub[floor_iter] = nh.advertise<visualization_msgs::Marker>(
+        "/map" + std::to_string(floor_iter), 10);
+  }
   ros::Publisher gvd_pub = nh.advertise<visualization_msgs::Marker>("/gvd", 10);
   ros::Publisher connect_pub =
       nh.advertise<visualization_msgs::Marker>("/connect", 10);
@@ -589,22 +565,78 @@ int main(int argc, char *argv[]) {
       nh.advertise<visualization_msgs::Marker>("/ilqr_path", 10);
   ros::Publisher corridor_pub =
       nh.advertise<visualization_msgs::MarkerArray>("/corridor", 10);
+  ros::Publisher astar_pub =
+      nh.advertise<visualization_msgs::Marker>("/astar_wp", 10);
+
+  // 设定起点
+  const Eigen::Vector3f start_pt = {-20.0, -20.0, 1.0};
+  const int start_index_x = (start_pt.x() - min_x) / resolution;
+  const int start_index_y = (start_pt.y() - min_y) / resolution;
+  const int start_index_z = (start_pt.z() - min_z) / resolution;
+  outFile << "Start, " << start_pt.x() << ", " << start_pt.y() << ", "
+          << start_pt.z() << std::endl;
+  if (grid[start_index_x][start_index_y][start_index_z] ==
+      GridAstar::GridState::kOcc) {
+    return 0;
+  }
+
+  // 设定终点
+  std::vector<Eigen::Vector3f> end_pts;
+  for (float end_x = -20.0; end_x <= 20.0 + 1e-2; end_x += 4.0) {
+    for (float end_y = -20.0; end_y <= 20.0 + 1e-2; end_y += 4.0) {
+      for (float end_z = 4.5; end_z <= 9.0; end_z += 3.0) {
+        const int end_index_x = (end_x - min_x) / resolution;
+        const int end_index_y = (end_y - min_y) / resolution;
+        const int end_index_z = (end_z - min_z) / resolution;
+        if (grid[end_index_x][end_index_y][end_index_z] ==
+            GridAstar::GridState::kOcc) {
+          continue;
+        }
+        end_pts.emplace_back(Eigen::Vector3f(end_x, end_y, end_z));
+      }
+    }
+  }
+  const int end_num = end_pts.size();
+  int count = 0;
 
   while (ros::ok()) {
     rate.sleep();
     ros::spinOnce();
-    map0_pub.publish(cube_list0);
-    map1_pub.publish(cube_list1);
-    map2_pub.publish(cube_list2);
+    for (int floor_iter = 0; floor_iter < num_floors; ++floor_iter) {
+      maps_pub[floor_iter].publish(cube_lists[floor_iter]);
+    }
     gvd_pub.publish(gvd_points);
     connect_pub.publish(connectivity);
 
-    const IntPoint3D start_point(25, 25, 15);
-    const IntPoint3D goal_point(25, 25, 75);
-    track.SetStartTime();
-    auto path = voronoi.GetAstarPath(start_point, goal_point);
-    track.OutputPassingTime("GetAstarPath");
+    if (count >= end_num) {
+      return 0;
+    }
+    // Eigen::Vector3f end_pt = end_pts[count];
+    Eigen::Vector3f end_pt = {-20.0, -20.0, 7.5};
+    ++count;
 
+    const int end_index_x = (end_pt.x() - min_x) / resolution;
+    const int end_index_y = (end_pt.y() - min_y) / resolution;
+    const int end_index_z = (end_pt.z() - min_z) / resolution;
+    outFile << "End, " << end_pt.x() << ", " << end_pt.y() << ", " << end_pt.z()
+            << std::endl;
+
+    const IntPoint3D start_point(start_index_x, start_index_y, start_index_z);
+    const IntPoint3D goal_point(end_index_x, end_index_y, end_index_z);
+    track.SetStartTime();
+    AstarOutput astar_output = voronoi.GetAstarPath(start_point, goal_point);
+    outFile << "Rough Path Time, " << track.OutputPassingTime("GetAstarPath")
+            << std::endl;
+
+    // Skip failed paths.
+    if (astar_output.success == false) {
+      continue;
+    } else {
+      outFile << "Rough Num Exp, " << astar_output.num_expansions << std::endl;
+      outFile << "Rough Path Length, " << astar_output.path_length << std::endl;
+    }
+
+    const std::vector<IntPoint3D> &path = astar_output.path;
     const int num_path_points = path.size();
     path_marker.points.clear();
     corridor.id = 0;
@@ -630,17 +662,21 @@ int main(int argc, char *argv[]) {
       corridor.scale.z = 2 * distance * resolution;
       corridors.markers.emplace_back(corridor);
     }
+    // Optimize path using iLQR
     if (!path.empty()) {
       path_pub.publish(path_marker);
       corridor_pub.publish(corridors);
 
       track.SetStartTime();
-      std::vector<IntPoint3D> ilqr_path = voronoi.GetiLQRPath(path);
-      track.OutputPassingTime("GetiLQRPath");
+      iLQROutput ilqr_output = voronoi.GetiLQRPath(path);
+      outFile << "iLQR Path Time, " << track.OutputPassingTime("GetiLQRPath")
+              << std::endl;
+      outFile << "iLQR Num Iter, " << ilqr_output.num_iter << std::endl;
+      outFile << "iLQR Path Length, " << ilqr_output.path_length << std::endl;
 
+      const std::vector<IntPoint3D> &ilqr_path = ilqr_output.path;
       ilqr_path_marker.points.clear();
       const int num_ilqr_path_points = ilqr_path.size();
-      std::cout << "iLQR path: " << num_ilqr_path_points << std::endl;
       for (int i = 0; i < num_ilqr_path_points; ++i) {
         ilqr_path_marker.points.emplace_back();
         ilqr_path_marker.points.back().x =
@@ -652,5 +688,34 @@ int main(int argc, char *argv[]) {
       }
       ilqr_path_pub.publish(ilqr_path_marker);
     }
+
+    // A*寻路，并统计时间
+    track.SetStartTime();
+    GridAstarOutput grid_astar_output =
+        grid_astar.AstarPathDistance(start_pt, end_pt);
+    outFile << "Grid Astar Time,"
+            << track.OutputPassingTime("--Astar Search Total--") << std::endl;
+    outFile << "Grid Astar Num Exp," << grid_astar_output.num_expansions
+            << std::endl;
+    outFile << "Grid Astar Path Length," << grid_astar_output.path_length
+            << std::endl;
+
+    // 可视化轨迹
+    waypoint.points.clear();
+    waypoint.color.r = 1.0;
+    waypoint.color.g = 1.0;
+    waypoint.color.b = 1.0;
+    waypoint.color.a = 1.0;
+    const std::vector<std::shared_ptr<GridAstarNode>> &astar_path =
+        grid_astar.path();
+    const int wp_num = astar_path.size();
+    for (int i = 0; i < wp_num; ++i) {
+      geometry_msgs::Point wp_pos;
+      wp_pos.x = min_x + astar_path[i]->index_x_ * resolution;
+      wp_pos.y = min_y + astar_path[i]->index_y_ * resolution;
+      wp_pos.z = min_z + astar_path[i]->index_z_ * resolution;
+      waypoint.points.emplace_back(wp_pos);
+    }
+    astar_pub.publish(waypoint);
   }
 }
