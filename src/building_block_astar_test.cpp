@@ -468,7 +468,7 @@ int main(int argc, char **argv) {
   waypoint.scale.x = 0.1;
   waypoint.pose.orientation.w = 1.0;
   waypoint.id = 0;
-  waypoint.type = visualization_msgs::Marker::LINE_LIST;
+  waypoint.type = visualization_msgs::Marker::LINE_STRIP;
 
   visualization_msgs::MarkerArray voxels;
   visualization_msgs::Marker voxel;
@@ -702,8 +702,7 @@ int main(int argc, char **argv) {
     // Eigen::Vector3f start_pt = {xy(gen), xy(gen), z(gen)};
     // Eigen::Vector3f end_pt = {xy(gen), xy(gen), z(gen)};
     Eigen::Vector3f start_pt = {-30.0, -30.0, 0.5 * floor_height * resolution};
-    Eigen::Vector3f end_pt = {xy(gen), xy(gen),
-                              (count % 3 + 0.5) * floor_height * resolution};
+    Eigen::Vector3f end_pt = {30.0, 30.0, 2.5 * floor_height * resolution};
     // Eigen::Vector3f start_pt = {-30.0, -30.0, 2.5};
     // Eigen::Vector3f end_pt = {30.0, 30.0, 12.5};
 
@@ -810,26 +809,25 @@ int main(int argc, char **argv) {
     }
     ilqr_pub.publish(waypoint);
 
-    // // A*寻路，并统计时间
-    // track.SetStartTime();
-    // std::cout << "Astar Search Distance: "
-    //           << grid_astar.AstarPathDistance(start_pt, end_pt) << std::endl;
-    // track.OutputPassingTime("--Astar Search Total--");
-    // // 可视化轨迹
-    // waypoint.points.clear();
-    // waypoint.color.r = 0.0;
-    // waypoint.color.g = 0.0;
-    // waypoint.color.b = 1.0;
-    // waypoint.color.a = 1.0;
-    // const std::vector<std::shared_ptr<GridAstarNode>> &path =
-    // grid_astar.path(); const int wp_num = path.size(); for (int i = 0; i <
-    // wp_num; ++i) {
-    //   geometry_msgs::Point wp_pos;
-    //   wp_pos.x = min_x + path[i]->index_x_ * resolution;
-    //   wp_pos.y = min_y + path[i]->index_y_ * resolution;
-    //   wp_pos.z = min_z + path[i]->index_z_ * resolution;
-    //   waypoint.points.emplace_back(wp_pos);
-    // }
-    // wp_pub.publish(waypoint);
+    // A*寻路，并统计时间
+    track.SetStartTime();
+    grid_astar.AstarPathDistance(start_pt, end_pt);
+    track.OutputPassingTime("--Astar Search Total--");
+    // 可视化轨迹
+    waypoint.points.clear();
+    waypoint.color.r = 0.0;
+    waypoint.color.g = 0.0;
+    waypoint.color.b = 1.0;
+    waypoint.color.a = 1.0;
+    const std::vector<std::shared_ptr<GridAstarNode>> &path = grid_astar.path();
+    const int wp_num = path.size();
+    for (int i = 0; i < wp_num; ++i) {
+      geometry_msgs::Point wp_pos;
+      wp_pos.x = min_x + path[i]->index_x_ * resolution;
+      wp_pos.y = min_y + path[i]->index_y_ * resolution;
+      wp_pos.z = min_z + path[i]->index_z_ * resolution;
+      waypoint.points.emplace_back(wp_pos);
+    }
+    wp_pub.publish(waypoint);
   }
 }
