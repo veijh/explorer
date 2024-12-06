@@ -469,8 +469,9 @@ void GridAstar::MergeMap3D() {
   std::cout << "total_num: " << merge_map_3d_.size() << std::endl;
 }
 
-float GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
-                                   const Eigen::Vector3f &end_p) {
+GridAstarOutput GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
+                                             const Eigen::Vector3f &end_p) {
+  GridAstarOutput output;
   TimeTrack tracker;
   const int num_x_grid = grid_map_.size();
   const int num_y_grid = grid_map_[0].size();
@@ -590,8 +591,10 @@ float GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
   }
   tracker.OutputPassingTime("Astar Done");
   tracker.SetStartTime();
+  output.num_expansions = count;
 
   if (is_path_found) {
+    output.success = true;
     float distance = 0.0;
     path_.clear();
     // Insert last node.
@@ -602,9 +605,6 @@ float GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
       const int delta_x = last_path_node->index_x_ - path_node->index_x_;
       const int delta_y = last_path_node->index_y_ - path_node->index_y_;
       const int delta_z = last_path_node->index_z_ - path_node->index_z_;
-      // distance += resolution_ *
-      //             (std::abs(delta_x) + std::abs(delta_y) +
-      //             std::abs(delta_z));
       distance += resolution_ * std::hypot(delta_x, delta_y, delta_z);
       path_.emplace_back(path_node);
       last_path_node = path_node;
@@ -614,13 +614,16 @@ float GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
     std::cout << "[Astar] waypoint generated!! waypoint num: " << path_.size()
               << ", select node num: " << count << std::endl;
     tracker.OutputPassingTime("Astar Output");
-    return distance;
+    output.path_length = distance;
+    return output;
   } else {
+    output.success = false;
     std::cout << "[WARNING] no path !! from " << std::endl
               << start_p << std::endl
               << "to " << std::endl
               << end_p << std::endl;
-    return (end_p - start_p).norm();
+    output.path_length = (start_p - end_p).norm();
+    return output;
   }
 }
 
@@ -1206,5 +1209,6 @@ inline float GridAstar::CalHeurScore(const std::shared_ptr<GridAstarNode> &node,
   float delta_x = end_p.x() - (node->index_x_ * resolution_ + min_x_);
   float delta_y = end_p.y() - (node->index_y_ * resolution_ + min_y_);
   float delta_z = end_p.z() - (node->index_z_ * resolution_ + min_z_);
-  return std::abs(delta_x) + std::abs(delta_y) + 10.0 * std::abs(delta_z);
+  // return std::abs(delta_x) + std::abs(delta_y) + 10.0 * std::abs(delta_z);
+  return std::hypot(delta_x, delta_y, delta_z);
 }

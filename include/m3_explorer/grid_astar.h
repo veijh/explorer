@@ -113,6 +113,12 @@ public:
   void UpdateEdgesInSameBlock();
 };
 
+struct GridAstarOutput {
+  bool success;
+  float path_length;
+  int num_expansions;
+};
+
 class GridAstar {
 public:
   enum class GridState { kFree = 0, kUnknown, kOcc };
@@ -164,8 +170,8 @@ public:
   void MergeMap2D();
   void Merge3DVoxelAlongXUnitTest();
   void MergeMap3D();
-  float AstarPathDistance(const Eigen::Vector3f &start_p,
-                          const Eigen::Vector3f &end_p);
+  GridAstarOutput AstarPathDistance(const Eigen::Vector3f &start_p,
+                                    const Eigen::Vector3f &end_p);
   float BlockPathDistance(const Eigen::Vector3f &start_p,
                           const Eigen::Vector3f &end_p);
   float BlockPathRefine(const std::vector<int> &block_path,

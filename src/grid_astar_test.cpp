@@ -443,8 +443,7 @@ int main(int argc, char **argv) {
 
     // A*寻路，并统计时间
     track.SetStartTime();
-    std::cout << "Astar Search Distance: "
-              << grid_astar.AstarPathDistance(start_pt, end_pt) << std::endl;
+    grid_astar.AstarPathDistance(start_pt, end_pt);
     track.OutputPassingTime("--Astar Search Total--");
     // 可视化轨迹
     waypoint.points.clear();
