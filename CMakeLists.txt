@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(m3_explorer)
+project(explorer)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
 add_compile_options(-std=c++17)
@@ -31,6 +31,8 @@ find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED)
 
 find_package(yaml-cpp REQUIRED)
+
+find_package(OpenMP REQUIRED)
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -119,7 +121,7 @@ generate_messages(
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
 #  INCLUDE_DIRS include
-#  LIBRARIES m3_explorer
+#  LIBRARIES explorer
 #  CATKIN_DEPENDS roscpp rospy std_msgs
 #  DEPENDS system_lib
 )
@@ -147,8 +149,16 @@ add_library(${PROJECT_NAME}_lib
   src/hastar.cpp
   src/astar.cpp
   src/octo_astar.cpp
+)
+
+add_library(${PROJECT_NAME}_block_lib
   src/grid_astar.cpp
   src/block.cpp
+)
+
+add_library(${PROJECT_NAME}_voronoi_lib
+  src/dynamicvoronoi.cpp
+  src/dynamicvoronoi3D.cpp
 )
 
 ## Add cmake target dependencies of the library
@@ -159,7 +169,7 @@ add_dependencies(${PROJECT_NAME}_lib ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catki
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
-add_executable(${PROJECT_NAME} src/m3_explorer.cpp)
+add_executable(${PROJECT_NAME} src/explorer.cpp)
 add_executable(analyze src/analyze.cpp)
 add_executable(control_test src/control_test.cpp src/hastar.cpp src/astar.cpp)
 add_executable(mavros_ctrl src/mavros_ctrl.cpp)
@@ -167,7 +177,14 @@ add_executable(map_merge src/map_merge.cpp)
 add_executable(frontier_test src/frontier_test.cpp)
 add_executable(octo_astar_test src/octo_astar_test.cpp)
 add_executable(grid_astar_test src/grid_astar_test.cpp)
+add_executable(block_astar_test src/block_astar_test.cpp)
+add_executable(building_block_astar_test src/building_block_astar_test.cpp)
 add_executable(create_map_test src/create_map_test.cpp)
+add_executable(create_s3dis_map_test src/create_s3dis_map_test.cpp)
+add_executable(create_building_test src/create_building_test.cpp)
+add_executable(voronoi_test src/voronoi_test.cpp)
+add_executable(voronoi3D_test src/voronoi3D_test.cpp)
+add_executable(voronoi2DS_test src/voronoi2DS_test.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -218,6 +235,44 @@ target_link_libraries(grid_astar_test
   ${catkin_LIBRARIES}
   ${PROJECT_NAME}_lib
   ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(block_astar_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(building_block_astar_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(voronoi_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_voronoi_lib
+)
+
+target_link_libraries(voronoi3D_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_voronoi_lib
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(voronoi2DS_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_voronoi_lib
+  OpenMP::OpenMP_CXX
 )
 
 target_link_libraries(create_map_test
@@ -225,6 +280,15 @@ target_link_libraries(create_map_test
   ${PROJECT_NAME}_lib
   ${Boost_LIBRARIES}
   ${YAML_CPP_LIBRARIES}
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(create_s3dis_map_test
+  ${catkin_LIBRARIES}
+)
+
+target_link_libraries(create_building_test
+  ${catkin_LIBRARIES}
 )
 
 #############
@@ -274,7 +338,7 @@ target_link_libraries(create_map_test
 #############
 
 ## Add gtest based cpp test target and link libraries
-# catkin_add_gtest(${PROJECT_NAME}-test test/test_m3_explorer.cpp)
+# catkin_add_gtest(${PROJECT_NAME}-test test/test_explorer.cpp)
 # if(TARGET ${PROJECT_NAME}-test)
 #   target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME})
 # endif()

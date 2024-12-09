@@ -1,36 +1,146 @@
 #include "explorer/grid_astar.h"
 #include "explorer/time_track.hpp"
 #include <Eigen/Dense>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <geometry_msgs/Point.h>
-#include <octomap/octomap.h>
-#include <octomap_msgs/Octomap.h>
-#include <octomap_msgs/conversions.h>
+#include <iostream>
 #include <random>
 #include <ros/ros.h>
 #include <visualization_msgs/Marker.h>
 #include <visualization_msgs/MarkerArray.h>
 
-octomap::OcTree *ocmap = nullptr;
-void octomap_cb(const octomap_msgs::Octomap::ConstPtr &msg) {
-  delete ocmap;
-  ocmap = dynamic_cast<octomap::OcTree *>(msgToMap(*msg));
-}
-
 int main(int argc, char **argv) {
-  ros::init(argc, argv, "grid_astar_test");
+  ros::init(argc, argv, "block_astar_test");
   ros::NodeHandle nh("");
 
-  // get octomap
-  ros::Subscriber octomap_sub =
-      nh.subscribe<octomap_msgs::Octomap>("/merged_map", 1, octomap_cb);
+  ros::Rate rate(0.2);
+
+  const float min_x = -40;
+  const float max_x = 40;
+  const float min_y = -40;
+  const float max_y = 40;
+  const float min_z = -0.5;
+  const float max_z = 2.5;
+  const float resolution = 0.1;
+
+  const int num_x_grid =
+      static_cast<int>(std::ceil((max_x - min_x) / resolution));
+  const int num_y_grid =
+      static_cast<int>(std::ceil((max_y - min_y) / resolution));
+  const int num_z_grid =
+      static_cast<int>(std::ceil((max_z - min_z) / resolution));
+
+  std::vector<std::vector<std::vector<GridAstar::GridState>>> grid(
+      num_x_grid,
+      std::vector<std::vector<GridAstar::GridState>>(
+          num_y_grid, std::vector<GridAstar::GridState>(
+                          num_z_grid, GridAstar::GridState::kFree)));
+
+  std::vector<std::vector<std::vector<float>>> r_grid(
+      num_x_grid, std::vector<std::vector<float>>(
+                      num_y_grid, std::vector<float>(num_z_grid, 0)));
+
+  std::vector<std::vector<std::vector<float>>> g_grid(
+      num_x_grid, std::vector<std::vector<float>>(
+                      num_y_grid, std::vector<float>(num_z_grid, 0)));
+
+  std::vector<std::vector<std::vector<float>>> b_grid(
+      num_x_grid, std::vector<std::vector<float>>(
+                      num_y_grid, std::vector<float>(num_z_grid, 0)));
+
+  const int floor_z_lb =
+      static_cast<int>(std::ceil((-0.2 - min_z) / resolution));
+  const int floor_z_ub =
+      static_cast<int>(std::ceil((0.0 - min_z) / resolution));
+
+  for (int i = 0; i < num_x_grid; ++i) {
+    for (int j = 0; j < num_y_grid; ++j) {
+      for (int k = floor_z_lb; k <= floor_z_ub; ++k) {
+        grid[i][j][k] = GridAstar::GridState::kOcc;
+        r_grid[i][j][k] = 128.0;
+        g_grid[i][j][k] = 128.0;
+        b_grid[i][j][k] = 128.0;
+      }
+    }
+  }
+
+  std::filesystem::path dir = "/src/Stanford3dDataset_v1.2/Area_5";
+  std::vector<std::string> file_names;
+  for (const auto &entry : std::filesystem::directory_iterator(dir)) {
+    file_names.emplace_back(entry.path().filename());
+    std::cout << "Found " << entry.path().filename() << std::endl;
+  }
+  std::sort(file_names.begin(), file_names.end());
+  for (const auto &file_name : file_names) {
+    std::cout << "Reading " << file_name << std::endl;
+    std::string file_path =
+        dir.string() + "/" + file_name + "/" + file_name + ".txt";
+    FILE *file = fopen(file_path.c_str(), "r");
+    if (file == nullptr) {
+      std::cout << "Failed to open " << file_path << std::endl;
+      continue;
+    }
+    float x, y, z;
+    float r, g, b;
+    int count = 0;
+    while (fscanf(file, "%f%f%f%f%f%f", &x, &y, &z, &r, &g, &b) == 6) {
+      int x_grid = static_cast<int>(std::floor((x - min_x) / resolution));
+      int y_grid = static_cast<int>(std::floor((y - min_y) / resolution));
+      int z_grid = static_cast<int>(std::floor((z - min_z) / resolution));
+      if (x_grid < 0 || x_grid >= num_x_grid || y_grid < 0 ||
+          y_grid >= num_y_grid || z_grid < 0 || z_grid >= num_z_grid) {
+        continue;
+      }
+      grid[x_grid][y_grid][z_grid] = GridAstar::GridState::kOcc;
+      r_grid[x_grid][y_grid][z_grid] = r;
+      g_grid[x_grid][y_grid][z_grid] = g;
+      b_grid[x_grid][y_grid][z_grid] = b;
+    }
+    fclose(file);
+    std::cout << "Finish reading " << file_name << std::endl;
+  }
+
+  visualization_msgs::Marker cube_list;
+  cube_list.header.frame_id = "map";
+  cube_list.header.stamp = ros::Time::now();
+  cube_list.ns = "cube_list";
+  cube_list.action = visualization_msgs::Marker::ADD;
+  cube_list.pose.orientation.w = 1.0;
+  cube_list.id = 0;
+  cube_list.type = visualization_msgs::Marker::CUBE_LIST;
+  cube_list.scale.x = resolution * 0.95;
+  cube_list.scale.y = resolution * 0.95;
+  cube_list.scale.z = resolution * 0.95;
+
+  cube_list.points.clear();
+  cube_list.colors.clear();
+  for (int i = 0; i < num_x_grid; ++i) {
+    for (int j = 0; j < num_y_grid; ++j) {
+      for (int k = 0; k < num_z_grid; ++k) {
+        if (grid[i][j][k] == GridAstar::GridState::kOcc &&
+            min_z + k * resolution < 2.8) {
+          geometry_msgs::Point grid_pos;
+          grid_pos.x = min_x + i * resolution + 0.5 * resolution;
+          grid_pos.y = min_y + j * resolution + 0.5 * resolution;
+          grid_pos.z = min_z + k * resolution + 0.5 * resolution;
+          cube_list.points.emplace_back(grid_pos);
+          cube_list.colors.emplace_back();
+          cube_list.colors.back().a = 1.0;
+          cube_list.colors.back().r = r_grid[i][j][k] / 255.0;
+          cube_list.colors.back().g = g_grid[i][j][k] / 255.0;
+          cube_list.colors.back().b = b_grid[i][j][k] / 255.0;
+        }
+      }
+    }
+  }
+
+  ros::Publisher map_pub = nh.advertise<visualization_msgs::Marker>("/map", 10);
 
   // visualize waypoint
   ros::Publisher wp_pub =
       nh.advertise<visualization_msgs::Marker>("/waypoint", 10);
-
-  // visualize map
-  ros::Publisher node_pub =
-      nh.advertise<visualization_msgs::Marker>("/leafnode", 10);
 
   // visualize voxel
   ros::Publisher voxel_pub =
@@ -56,19 +166,8 @@ int main(int argc, char **argv) {
   ros::Publisher ilqr_pub =
       nh.advertise<visualization_msgs::Marker>("/ilqr_wp", 10);
 
-  ros::Rate rate(0.1);
-
-  visualization_msgs::Marker cube_list;
-  cube_list.header.frame_id = "map";
-  cube_list.header.stamp = ros::Time::now();
-  cube_list.ns = "cube_list";
-  cube_list.action = visualization_msgs::Marker::ADD;
-  cube_list.pose.orientation.w = 1.0;
-  cube_list.id = 0;
-  cube_list.type = visualization_msgs::Marker::CUBE_LIST;
-  cube_list.scale.x = 0.09;
-  cube_list.scale.y = 0.09;
-  cube_list.scale.z = 0.09;
+  GridAstar grid_astar(min_x, max_x, min_y, max_y, min_z, max_z, resolution,
+                       grid);
 
   visualization_msgs::Marker waypoint;
   waypoint.header.frame_id = "map";
@@ -116,15 +215,6 @@ int main(int argc, char **argv) {
   block.color.g = 0.2;
   block.color.a = 0.8;
 
-  const float min_x = -10.5;
-  const float max_x = 10.5;
-  const float min_y = -10.5;
-  const float max_y = 10.5;
-  const float min_z = -0.1;
-  const float max_z = 2.0;
-  const float resolution = 0.1;
-  GridAstar grid_astar(min_x, max_x, min_y, max_y, min_z, max_z, resolution);
-
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_real_distribution<float> xy(min_x, max_x);
@@ -133,18 +223,13 @@ int main(int argc, char **argv) {
   std::uniform_real_distribution<float> distrib(0.0, 1.0);
 
   int rolling_x = 0;
+
   while (ros::ok()) {
     rate.sleep();
     ros::spinOnce();
-    if (ocmap == nullptr) {
-      continue;
-    }
-    octomap::point3d bx_min(min_x, min_y, min_z);
-    octomap::point3d bx_max(max_x, max_y, max_z);
-    TimeTrack track;
-    grid_astar.UpdateFromMap(ocmap, bx_min, bx_max);
-    track.OutputPassingTime("Update Map");
+    map_pub.publish(cube_list);
 
+    TimeTrack track;
     track.SetStartTime();
     grid_astar.MergeMap();
     track.OutputPassingTime("Merge Map");
@@ -164,26 +249,6 @@ int main(int argc, char **argv) {
     const int x_size = grid_map.size();
     const int y_size = grid_map[0].size();
     const int z_size = grid_map[0][0].size();
-    cube_list.points.clear();
-    cube_list.colors.clear();
-    for (int i = 0; i < x_size; ++i) {
-      for (int j = 0; j < y_size; ++j) {
-        for (int k = 0; k < z_size; ++k) {
-          if (grid_map[i][j][k] == GridAstar::GridState::kOcc) {
-            geometry_msgs::Point grid_pos;
-            grid_pos.x = min_x + i * resolution + 0.5 * resolution;
-            grid_pos.y = min_y + j * resolution + 0.5 * resolution;
-            grid_pos.z = min_z + k * resolution + 0.5 * resolution;
-            cube_list.points.emplace_back(grid_pos);
-            cube_list.colors.emplace_back();
-            cube_list.colors.back().a = 1.0;
-            cube_list.colors.back().g = 0.8;
-          }
-        }
-      }
-    }
-    node_pub.publish(cube_list);
-    track.OutputPassingTime("Visualize Map");
 
     track.SetStartTime();
     voxels.markers.clear();
@@ -426,9 +491,9 @@ int main(int argc, char **argv) {
 
     // 可视化轨迹
     waypoint.points.clear();
-    waypoint.color.r = 0.0;
-    waypoint.color.g = 0.4;
-    waypoint.color.b = 0.4;
+    waypoint.color.r = 1.0;
+    waypoint.color.g = 0.2;
+    waypoint.color.b = 0.2;
     waypoint.color.a = 1.0;
     const std::vector<std::vector<float>> &ilqr_path = grid_astar.ilqr_path();
     const int ilqr_wp_num = ilqr_path.size();
@@ -463,32 +528,3 @@ int main(int argc, char **argv) {
     wp_pub.publish(waypoint);
   }
 }
-
-// octomap::point3d bx_min(-10.0, -10.0, 0.2);
-// octomap::point3d bx_max(10.0, 10.0, 0.4);
-// int count = 0;
-// marker_array.markers.clear();
-// for(octomap::OcTree::leaf_bbx_iterator it = ocmap->begin_leafs_bbx(bx_min,
-// bx_max), end=ocmap->end_leafs_bbx(); it != end; it++){
-//   visualization_msgs::Marker box;
-//   box.header.frame_id = "map";
-//   box.header.stamp = ros::Time::now();
-
-//   box.action = visualization_msgs::Marker::ADD;
-//   box.scale.x = it.getSize()*0.8;
-//   box.scale.y = it.getSize()*0.8;
-//   box.scale.z = it.getSize()*0.8;
-//   box.pose.orientation.w = 1.0;
-//   box.id = count;
-//   box.type = visualization_msgs::Marker::CUBE;
-//   box.color.r = 0.0;
-//   box.color.g = 0.5;
-//   box.color.b = 0.0;
-//   box.color.a = 1.0;
-//   box.pose.position.x = it.getCoordinate().x();
-//   box.pose.position.y = it.getCoordinate().y();
-//   box.pose.position.z = it.getCoordinate().z();
-//   marker_array.markers.emplace_back(box);
-//   ++count;
-// }
-// node_pub.publish(marker_array);

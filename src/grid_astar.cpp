@@ -1,5 +1,5 @@
-#include "m3_explorer/grid_astar.h"
-#include "m3_explorer/time_track.hpp"
+#include "explorer/grid_astar.h"
+#include "explorer/time_track.hpp"
 #include <Eigen/Dense>
 #include <algorithm>
 #include <queue>
@@ -13,17 +13,20 @@ constexpr int kMapZSize = 8;
 constexpr int kMapYZSize = 128;
 constexpr int kMapXYZSize = 512;
 constexpr int kMergeBuffer = 5;
-constexpr int kFilterMinX = 4;
-constexpr int kFilterMinY = 4;
-constexpr int kFilterMinZ = 4;
-constexpr int kConnectivityMinY = 4;
-constexpr int kConnectivityMinZ = 4;
+constexpr int kFilterMinX = 2;
+constexpr int kFilterMinY = 2;
+constexpr int kFilterMinZ = 2;
+constexpr int kConnectivityMinY = 2;
+constexpr int kConnectivityMinZ = 2;
 constexpr int kMaxIteration = 100;
 constexpr float kConvergenceThreshold = 0.01;
 constexpr float kTermWeight = 100.0;
 constexpr float kBndWeight = 100.0;
 constexpr float kWeight = 0.2;
 constexpr int kMaxLineSearchIter = 10;
+constexpr int kMaxReplan = 1000;
+constexpr float kYBuffer = 3.0;
+constexpr float kZBuffer = 3.0;
 } // namespace
 
 const std::vector<Eigen::Vector3i> expand_offset = {
@@ -103,6 +106,13 @@ GridAstar::GridAstar(const float min_x, const float max_x, const float min_y,
       std::vector<std::vector<GridState>>(
           num_y_grid, std::vector<GridState>(num_z_grid, GridState::kUnknown)));
 }
+
+GridAstar::GridAstar(
+    const float min_x, const float max_x, const float min_y, const float max_y,
+    const float min_z, const float max_z, const float resolution,
+    const std::vector<std::vector<std::vector<GridState>>> &grid_map)
+    : min_x_(min_x), max_x_(max_x), min_y_(min_y), max_y_(max_y), min_z_(min_z),
+      max_z_(max_z), resolution_(resolution), grid_map_(grid_map) {}
 
 const std::vector<std::vector<std::vector<GridAstar::GridState>>> &
 GridAstar::grid_map() const {
@@ -370,6 +380,7 @@ std::vector<Block3D> GridAstar::Merge3DVoxelAlongX(
         const int plug_z_min = it->plug_.z_min_;
         const int plug_y_max = it->plug_.y_max_;
         const int plug_z_max = it->plug_.z_max_;
+        // Two voxels can be merged if their bounding boxes are similar.
         if (voxel_y_min_lb <= plug_y_min && plug_y_min <= voxel_y_min_ub &&
             voxel_z_min_lb <= plug_z_min && plug_z_min <= voxel_z_min_ub &&
             voxel_y_max_lb <= plug_y_max && plug_y_max <= voxel_y_max_ub &&
@@ -384,6 +395,8 @@ std::vector<Block3D> GridAstar::Merge3DVoxelAlongX(
           is_merged = true;
           break;
         }
+        // If two voxels can not be merged, which means they belong to different
+        // blocks, check if they are connected.
         const std::vector<Block2D> overlap_blocks =
             new_yz_voxel.GetOverlap(it->plug_);
         for (const Block2D &overlap_block : overlap_blocks) {
@@ -456,8 +469,9 @@ void GridAstar::MergeMap3D() {
   std::cout << "total_num: " << merge_map_3d_.size() << std::endl;
 }
 
-float GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
-                                   const Eigen::Vector3f &end_p) {
+GridAstarOutput GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
+                                             const Eigen::Vector3f &end_p) {
+  GridAstarOutput output;
   TimeTrack tracker;
   const int num_x_grid = grid_map_.size();
   const int num_y_grid = grid_map_[0].size();
@@ -577,8 +591,10 @@ float GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
   }
   tracker.OutputPassingTime("Astar Done");
   tracker.SetStartTime();
+  output.num_expansions = count;
 
   if (is_path_found) {
+    output.success = true;
     float distance = 0.0;
     path_.clear();
     // Insert last node.
@@ -589,9 +605,6 @@ float GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
       const int delta_x = last_path_node->index_x_ - path_node->index_x_;
       const int delta_y = last_path_node->index_y_ - path_node->index_y_;
       const int delta_z = last_path_node->index_z_ - path_node->index_z_;
-      // distance += resolution_ *
-      //             (std::abs(delta_x) + std::abs(delta_y) +
-      //             std::abs(delta_z));
       distance += resolution_ * std::hypot(delta_x, delta_y, delta_z);
       path_.emplace_back(path_node);
       last_path_node = path_node;
@@ -601,13 +614,16 @@ float GridAstar::AstarPathDistance(const Eigen::Vector3f &start_p,
     std::cout << "[Astar] waypoint generated!! waypoint num: " << path_.size()
               << ", select node num: " << count << std::endl;
     tracker.OutputPassingTime("Astar Output");
-    return distance;
+    output.path_length = distance;
+    return output;
   } else {
+    output.success = false;
     std::cout << "[WARNING] no path !! from " << std::endl
               << start_p << std::endl
               << "to " << std::endl
               << end_p << std::endl;
-    return (end_p - start_p).norm();
+    output.path_length = (start_p - end_p).norm();
+    return output;
   }
 }
 
@@ -774,7 +790,8 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
       static_cast<int>(std::floor((end_p.z() - min_z_) / resolution_));
   // Determine the index of block in the vector according to the block_id.
   std::unordered_map<int, int> block_id_map;
-  for (int i = 0; i < merge_map_3d_.size(); ++i) {
+  const int num_blocks = merge_map_3d_.size();
+  for (int i = 0; i < num_blocks; ++i) {
     if (block_id_map.find(merge_map_3d_[i].block_id_) == block_id_map.end()) {
       block_id_map[merge_map_3d_[i].block_id_] = i;
     } else {
@@ -844,7 +861,7 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
   }
   // iLQR Path Optimization.
   const int num_key_frames = key_frames.size();
-  const int num_constraints = key_frames_index.size();
+  int num_constraints = key_frames_index.size();
   Eigen::Matrix<float, 2, 4> F;
   // clang-format off
   F <<
@@ -868,7 +885,7 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
   std::cout << "Construct the initial guess..." << std::endl;
   xu_vecs[0] << index_start_y, index_start_z, 0.0, 0.0;
   x_hat_vecs[0] << index_start_y, index_start_z;
-  for (int i = 1; i < num_constraints; ++i) {
+  for (int i = 1; i < num_constraints - 1; ++i) {
     const int index = key_frames_index[i];
     const int y_lb = key_frames[index].y_min_;
     const int y_ub = key_frames[index].y_max_;
@@ -880,13 +897,17 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
     xu_vecs[i - 1].block<2, 1>(2, 0) =
         xu_vecs[i].block<2, 1>(0, 0) - xu_vecs[i - 1].block<2, 1>(0, 0);
   }
+  xu_vecs[num_constraints - 1] << index_end_y, index_end_z, 0.0, 0.0;
+  xu_vecs[num_constraints - 2].block<2, 1>(2, 0) =
+      xu_vecs[num_constraints - 1].block<2, 1>(0, 0) -
+      xu_vecs[num_constraints - 2].block<2, 1>(0, 0);
   std::cout << "start ilqr optimization..." << std::endl;
   bool is_ilqr_success = false;
   float cost_sum = 0.0;
-  float last_cost_sum = cost_sum;
   float path_length = 0.0;
   float last_path_length = path_length;
-  while (!is_ilqr_success) {
+  for (int replan = 0; !is_ilqr_success && replan < kMaxReplan; ++replan) {
+    std::cout << "replan: " << replan << std::endl;
     // Iteration Loop.
     for (int iter = 0; iter < kMaxIteration; ++iter) {
       Eigen::Matrix2f V;
@@ -906,6 +927,8 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
           q = cost.second;
         } else {
           const int real_index = key_frames_index[k];
+          const float delta_x = key_frame_x[key_frames_index[k + 1]] -
+                                key_frame_x[key_frames_index[k]];
           const int y_lb = key_frames[real_index].y_min_;
           const int y_ub = key_frames[real_index].y_max_;
           const int y_id =
@@ -913,9 +936,11 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
           RangeVoxel z_range;
           key_frames[real_index].GetRangeAtY(y_id, &z_range);
           const std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost =
-              GetCost(xu_vecs[k], y_lb, y_ub, z_range.min_, z_range.max_);
+              GetCost(xu_vecs[k], delta_x, y_lb + kYBuffer, y_ub - kYBuffer,
+                      z_range.min_ + kZBuffer, z_range.max_ - kZBuffer);
           cost_sum +=
-              GetRealCost(xu_vecs[k], y_lb, y_ub, z_range.min_, z_range.max_);
+              GetRealCost(xu_vecs[k], delta_x, y_lb + kYBuffer, y_ub - kYBuffer,
+                          z_range.min_ + kZBuffer, z_range.max_ - kZBuffer);
           Q = cost.first + F.transpose() * V * F;
           q = cost.second + F.transpose() * v;
         }
@@ -925,16 +950,16 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
         const Eigen::Matrix2f Quu = Q.block<2, 2>(2, 2);
         const Eigen::Vector2f qx = q.block<2, 1>(0, 0);
         const Eigen::Vector2f qu = q.block<2, 1>(2, 0);
-        const Eigen::Matrix2f K_mat = K_mats[k];
-        const Eigen::Vector2f k_vec = k_vecs[k];
         K_mats[k] = -Quu.inverse() * Qux;
         k_vecs[k] = -Quu.inverse() * qu;
+        const Eigen::Matrix2f K_mat = K_mats[k];
+        const Eigen::Vector2f k_vec = k_vecs[k];
         V = Qxx + Qxu * K_mat + K_mat.transpose() * Qux +
             K_mat.transpose() * Quu * K_mat;
         v = qx + Qxu * k_vec + K_mat.transpose() * qu +
             K_mat.transpose() * Quu * k_vec;
-        delta_V.first += k_vecs[k].transpose() * qu;
-        delta_V.second += 0.5 * k_vecs[k].transpose() * Quu * k_vecs[k];
+        delta_V.first += k_vec.transpose() * qu;
+        delta_V.second += 0.5 * k_vec.transpose() * Quu * k_vec;
       }
 
       float alpha = 1.0;
@@ -955,6 +980,8 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
           x_hat_vecs[k + 1] = F * xu_vecs[k];
           // Calculate the new cost.
           const int real_index = key_frames_index[k];
+          const float delta_x = key_frame_x[key_frames_index[k + 1]] -
+                                key_frame_x[key_frames_index[k]];
           const int y_lb = key_frames[real_index].y_min_;
           const int y_ub = key_frames[real_index].y_max_;
           const int y_id =
@@ -962,7 +989,8 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
           RangeVoxel z_range;
           key_frames[real_index].GetRangeAtY(y_id, &z_range);
           next_cost_sum +=
-              GetRealCost(xu_vecs[k], y_lb, y_ub, z_range.min_, z_range.max_);
+              GetRealCost(xu_vecs[k], delta_x, y_lb + kYBuffer, y_ub - kYBuffer,
+                          z_range.min_ + kZBuffer, z_range.max_ - kZBuffer);
         }
         xu_vecs[num_constraints - 1].block<2, 1>(0, 0) =
             x_hat_vecs[num_constraints - 1];
@@ -996,8 +1024,79 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
       }
     }
     // Check if the path is feasible.
-    is_ilqr_success = true;
-    // Add extra constraints.
+    std::vector<int> unvalid_index;
+    unvalid_index.reserve(num_key_frames);
+    for (int check = 0; check < num_constraints - 1; ++check) {
+      // Index, not x.
+      const int start_index = key_frames_index[check];
+      const int target_index = key_frames_index[check + 1];
+      const Eigen::Vector4f start_xu = xu_vecs[check];
+      const Eigen::Vector4f target_xu = xu_vecs[check + 1];
+      const Eigen::Vector4f slope =
+          (target_xu - start_xu) / (target_index - start_index);
+      const Eigen::Vector4f bias =
+          (target_index * start_xu - start_index * target_xu) /
+          (target_index - start_index);
+      for (int index = start_index; index < target_index; ++index) {
+        const Block2D &block2d = key_frames[index];
+        const Eigen::Vector4f xu = slope * index + bias;
+        if (block2d.IsInBlock(xu(0), xu(1)) == false) {
+          unvalid_index.emplace_back(index);
+          // std::cout << "unvalid index: " << index << std::endl;
+        }
+      }
+    }
+    if (unvalid_index.empty()) {
+      is_ilqr_success = true;
+    } else {
+      // Add extra constraints.
+      int unvalid_start = unvalid_index[0];
+      const int num_unvalid = unvalid_index.size();
+      for (int i = 0; i < num_unvalid; ++i) {
+        if (i == num_unvalid - 1 ||
+            unvalid_index[i] + 1 != unvalid_index[i + 1]) {
+          const int unvalid_mid = (unvalid_start + unvalid_index[i]) / 2;
+          // Insert unvalid_mid to key_frames_index.
+          const int insert_iter = std::distance(
+              key_frames_index.begin(),
+              std::lower_bound(key_frames_index.begin(), key_frames_index.end(),
+                               unvalid_mid));
+          if (key_frames_index[insert_iter] != unvalid_mid) {
+            key_frames_index.emplace(key_frames_index.begin() + insert_iter,
+                                     unvalid_mid);
+            // Update xu_vecs.
+            const int y_lb = key_frames[unvalid_mid].y_min_;
+            const int y_ub = key_frames[unvalid_mid].y_max_;
+            const int y_initial = (y_lb + y_ub) / 2;
+            RangeVoxel z_range;
+            key_frames[unvalid_mid].GetRangeAtY(y_initial, &z_range);
+            const int z_initial = (z_range.min_ + z_range.max_) / 2;
+            Eigen::Vector4f new_xu_constraint;
+            new_xu_constraint.block<2, 1>(0, 0) << y_initial, z_initial;
+            new_xu_constraint.block<2, 1>(2, 0) =
+                xu_vecs[insert_iter].block<2, 1>(0, 0) -
+                new_xu_constraint.block<2, 1>(0, 0);
+            xu_vecs[insert_iter - 1].block<2, 1>(2, 0) =
+                new_xu_constraint.block<2, 1>(0, 0) -
+                xu_vecs[insert_iter - 1].block<2, 1>(0, 0);
+            xu_vecs.emplace(xu_vecs.begin() + insert_iter, new_xu_constraint);
+          }
+          // Update unvalid_start.
+          unvalid_start = unvalid_index[i + 1];
+        }
+      }
+
+      // Resize K_mats, k_vecs, x_hat_vecs.
+      const int num_new_constraints = key_frames_index.size();
+      if (num_new_constraints == num_constraints) {
+        is_ilqr_success = true;
+      } else {
+        K_mats.resize(num_new_constraints, Eigen::Matrix2f::Zero());
+        k_vecs.resize(num_new_constraints, Eigen::Vector2f::Zero());
+        x_hat_vecs.resize(num_new_constraints, Eigen::Vector2f::Zero());
+        num_constraints = num_new_constraints;
+      }
+    }
   }
 
   ilqr_path_.clear();
@@ -1013,8 +1112,9 @@ float GridAstar::BlockPathRefine(const std::vector<int> &block_path,
 }
 
 std::pair<Eigen::Matrix4f, Eigen::Vector4f>
-GridAstar::GetCost(const Eigen::Vector4f &xu, const float y_lb,
-                   const float y_ub, const float z_lb, const float z_ub) {
+GridAstar::GetCost(const Eigen::Vector4f &xu, const float x_delta,
+                   const float y_lb, const float y_ub, const float z_lb,
+                   const float z_ub) {
   float dcy = 0.0;
   float ddcy = 0.0;
   float dcz = 0.0;
@@ -1035,27 +1135,30 @@ GridAstar::GetCost(const Eigen::Vector4f &xu, const float y_lb,
     dcz = kBndWeight * (xu(1) - z_lb);
     ddcz = kBndWeight;
   }
+  const float control_weight = kWeight / std::max((std::fabs(x_delta)), 1.0f);
   std::pair<Eigen::Matrix4f, Eigen::Vector4f> cost;
   // clang-format off
   cost.first << 
   ddcy, 0.0, 0.0, 0.0,
   0.0, ddcz, 0.0, 0.0,
-  0.0, 0.0, kWeight, 0.0, 
-  0.0, 0.0, 0.0, kWeight;
+  0.0, 0.0, control_weight, 0.0, 
+  0.0, 0.0, 0.0, control_weight;
   cost.second <<
   dcy,
   dcz,
-  kWeight * xu(2),
-  kWeight * xu(3);
+  control_weight * xu(2),
+  control_weight * xu(3);
   // clang-format on
   return cost;
 }
 
-float GridAstar::GetRealCost(const Eigen::Vector4f &xu, const float y_lb,
-                             const float y_ub, const float z_lb,
-                             const float z_ub) {
+float GridAstar::GetRealCost(const Eigen::Vector4f &xu, const float x_delta,
+                             const float y_lb, const float y_ub,
+                             const float z_lb, const float z_ub) {
   float real_cost = 0.0;
-  real_cost += kWeight * 0.5 * xu(2) * xu(2) + kWeight * 0.5 * xu(3) * xu(3);
+  const float control_weight = kWeight / std::max((std::fabs(x_delta)), 1.0f);
+  real_cost += control_weight * 0.5 * xu(2) * xu(2) +
+               control_weight * 0.5 * xu(3) * xu(3);
   if (xu(0) > y_ub) {
     const float delta_y_square = (xu(0) - y_ub) * (xu(0) - y_ub);
     real_cost += kBndWeight * 0.5 * delta_y_square;
@@ -1106,5 +1209,6 @@ inline float GridAstar::CalHeurScore(const std::shared_ptr<GridAstarNode> &node,
   float delta_x = end_p.x() - (node->index_x_ * resolution_ + min_x_);
   float delta_y = end_p.y() - (node->index_y_ * resolution_ + min_y_);
   float delta_z = end_p.z() - (node->index_z_ * resolution_ + min_z_);
-  return std::abs(delta_x) + std::abs(delta_y) + 10.0 * std::abs(delta_z);
+  // return std::abs(delta_x) + std::abs(delta_y) + 10.0 * std::abs(delta_z);
+  return std::hypot(delta_x, delta_y, delta_z);
 }

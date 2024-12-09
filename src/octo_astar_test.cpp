@@ -1,4 +1,4 @@
-#include "m3_explorer/octo_astar.h"
+#include "explorer/octo_astar.h"
 #include <Eigen/Dense>
 #include <chrono>
 #include <geometry_msgs/Point.h>

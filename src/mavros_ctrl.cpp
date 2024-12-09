@@ -1,4 +1,4 @@
-#include "m3_explorer/Traj.h"
+#include "explorer/Traj.h"
 #include <geometry_msgs/PoseStamped.h>
 #include <math.h>
 #include <mavros_msgs/PositionTarget.h>
@@ -10,8 +10,8 @@ ros::Publisher local_pos_pub;
 ros::Publisher sp_pub;
 int traj_id = 0;
 
-m3_explorer::Traj traj;
-void traj_cb(const m3_explorer::Traj::ConstPtr &msg) {
+explorer::Traj traj;
+void traj_cb(const explorer::Traj::ConstPtr &msg) {
   traj = *msg;
   traj_id = 0;
 }
@@ -40,8 +40,7 @@ int main(int argc, char **argv) {
   ros::NodeHandle nh("");
 
   // input: traj
-  ros::Subscriber traj_sub =
-      nh.subscribe<m3_explorer::Traj>("traj", 10, traj_cb);
+  ros::Subscriber traj_sub = nh.subscribe<explorer::Traj>("traj", 10, traj_cb);
 
   // output: cmd
   local_pos_pub = nh.advertise<mavros_msgs::PositionTarget>(

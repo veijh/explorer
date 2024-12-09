@@ -1,0 +1,14 @@
+<launch>
+    <node name="map_merge" pkg="explorer" type="map_merge" respawn="false" output="screen"/>
+    <include file="$(find explorer)/launch/single_explorer.launch">
+        <arg name="ID" value="0"/>
+    </include>
+
+    <include file="$(find explorer)/launch/single_explorer.launch">
+        <arg name="ID" value="1"/>
+    </include>
+
+    <include file="$(find explorer)/launch/single_explorer.launch">
+        <arg name="ID" value="2"/>
+    </include>
+</launch>

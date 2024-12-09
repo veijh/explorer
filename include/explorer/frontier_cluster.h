@@ -1,7 +1,7 @@
 #ifndef FRONTIER_CLUSTER_H
 #define FRONTIER_CLUSTER_H
 
-#include "m3_explorer/QuadMesh.h"
+#include "explorer/QuadMesh.h"
 #include <Eigen/Dense>
 #include <geometry_msgs/PoseArray.h>
 #include <octomap/octomap.h>

@@ -1,5 +1,6 @@
-#include "m3_explorer/octo_astar.h"
+#include "explorer/octo_astar.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <geometry_msgs/PoseStamped.h>
@@ -9,7 +10,6 @@
 #include <stack>
 #include <string>
 #include <unordered_map>
-#include <chrono>
 
 const std::vector<Eigen::Vector3f> center_offset = {
     {-1.0, -1.0, -1.0}, {1.0, -1.0, -1.0}, {-1.0, 1.0, -1.0}, {1.0, 1.0, -1.0},
@@ -23,8 +23,9 @@ const std::vector<std::vector<int>> adj_child = {{1, 3, 5, 7}, {0, 2, 4, 6},
                                                  {2, 3, 6, 7}, {0, 1, 4, 5},
                                                  {4, 5, 6, 7}, {0, 1, 2, 3}};
 
-OctoAstar::OctoAstar(const octomap::OcTree *ocmap) : ocmap_(ocmap){
-  root_node_ = std::make_shared<OctoNode>(ocmap_->getRoot(), Eigen::Vector3f(0.0, 0.0, 0.0), 0.1 * 65536, nullptr);
+OctoAstar::OctoAstar(const octomap::OcTree *ocmap) : ocmap_(ocmap) {
+  root_node_ = std::make_shared<OctoNode>(
+      ocmap_->getRoot(), Eigen::Vector3f(0.0, 0.0, 0.0), 0.1 * 65536, nullptr);
 }
 
 std::shared_ptr<OctoNode> OctoAstar::search_octonode(const Eigen::Vector3f &p) {
@@ -56,7 +57,7 @@ float OctoAstar::astar_path_distance(const Eigen::Vector3f &start_p,
 
   // search the node at start_p from top to bottom
   std::shared_ptr<OctoNode> octo_node = search_octonode(start_p);
-  if(octo_node == nullptr) {
+  if (octo_node == nullptr) {
     return 999.0;
   }
 
@@ -69,7 +70,8 @@ float OctoAstar::astar_path_distance(const Eigen::Vector3f &start_p,
   int count = 0;
 
   OctoAstarNodeKey astar_root_key(octo_node->center_);
-  std::shared_ptr<OctoAstarNode> astar_root = std::make_shared<OctoAstarNode>(octo_node->center_);
+  std::shared_ptr<OctoAstarNode> astar_root =
+      std::make_shared<OctoAstarNode>(octo_node->center_);
   astar_root->octo_node_ = octo_node;
   astar_root->father_node_ = nullptr;
   astar_root->g_score_ = 0.0;
@@ -100,7 +102,8 @@ float OctoAstar::astar_path_distance(const Eigen::Vector3f &start_p,
 
     // expand in six directions
     for (int i = 0; i < expand_size; ++i) {
-      Eigen::Vector3f next_pos = astar_node->position_ + cur_octo_node->size_ * expand_offset[i];
+      Eigen::Vector3f next_pos =
+          astar_node->position_ + cur_octo_node->size_ * expand_offset[i];
 
       // search for free adjacent leaf octo node
       // go from bottom to top until bbx contains next_pos
@@ -143,15 +146,16 @@ float OctoAstar::astar_path_distance(const Eigen::Vector3f &start_p,
         while (!bfs_q.empty()) {
           std::shared_ptr<OctoNode> bfs_node = bfs_q.front();
           bfs_q.pop();
-          
+
           if (!ocmap_->nodeHasChildren(bfs_node->node_)) {
-            if(!ocmap_->isNodeOccupied(bfs_node->node_)){
+            if (!ocmap_->isNodeOccupied(bfs_node->node_)) {
               add_node_to_q(bfs_node, astar_node, end_p, astar_q);
             }
             continue;
           }
 
-          if(bfs_node->size_ < 0.2) continue;
+          if (bfs_node->size_ < 0.2)
+            continue;
 
           for (int index = 0; index < 4; ++index) {
             if (ocmap_->nodeChildExists(bfs_node->node_, adj_child[i][index])) {
@@ -172,8 +176,9 @@ float OctoAstar::astar_path_distance(const Eigen::Vector3f &start_p,
           }
         }
       } else {
-        // small node to big node, only add one node, shift to the center of free leaf node
-        if(!ocmap_->isNodeOccupied(next_node->node_)){
+        // small node to big node, only add one node, shift to the center of
+        // free leaf node
+        if (!ocmap_->isNodeOccupied(next_node->node_)) {
           add_node_to_q(next_node, astar_node, end_p, astar_q);
         }
       }
@@ -211,7 +216,7 @@ float OctoAstar::astar_path_distance(const Eigen::Vector3f &start_p,
 }
 
 inline float OctoAstar::calc_h_score(const Eigen::Vector3f &start_p,
-                              const Eigen::Vector3f &end_p) {
+                                     const Eigen::Vector3f &end_p) {
   // return (end_p - start_p).norm();
   // return (end_p - start_p).lpNorm<1>();
   Eigen::Vector3f delta = end_p - start_p;
@@ -236,7 +241,8 @@ bool OctoAstar::is_path_valid(const Eigen::Vector3f &cur_pos,
   //   }
   // }
   // return true;
-  octomap::OcTreeNode *oc_node = ocmap_->search(next_pos.x(), next_pos.y(), next_pos.z());
+  octomap::OcTreeNode *oc_node =
+      ocmap_->search(next_pos.x(), next_pos.y(), next_pos.z());
   if (oc_node == nullptr) {
     // cout << "unknown" << endl;
     return false;

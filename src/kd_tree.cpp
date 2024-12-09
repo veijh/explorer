@@ -1,4 +1,4 @@
-#include "m3_explorer/kd_tree.h"
+#include "explorer/kd_tree.h"
 
 #include <algorithm>
 #include <cmath>

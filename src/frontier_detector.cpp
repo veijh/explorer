@@ -1,4 +1,4 @@
-#include "m3_explorer/frontier_detector.h"
+#include "explorer/frontier_detector.h"
 
 #include <Eigen/Dense>
 #include <cmath>

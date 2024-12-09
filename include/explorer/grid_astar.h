@@ -1,6 +1,6 @@
 #ifndef GRID_ASTAR_H
 #define GRID_ASTAR_H
-#include "m3_explorer/block.h"
+#include "explorer/block.h"
 #include <Eigen/Dense>
 #include <octomap/octomap.h>
 #include <ros/ros.h>
@@ -113,6 +113,12 @@ public:
   void UpdateEdgesInSameBlock();
 };
 
+struct GridAstarOutput {
+  bool success;
+  float path_length;
+  int num_expansions;
+};
+
 class GridAstar {
 public:
   enum class GridState { kFree = 0, kUnknown, kOcc };
@@ -152,6 +158,10 @@ public:
   GridAstar(const float min_x, const float max_x, const float min_y,
             const float max_y, const float min_z, const float max_z,
             const float resolution = 0.1);
+  GridAstar(const float min_x, const float max_x, const float min_y,
+            const float max_y, const float min_z, const float max_z,
+            const float resolution,
+            const std::vector<std::vector<std::vector<GridState>>> &grid_map);
   void UpdateFromMap(const octomap::OcTree *ocmap,
                      const octomap::point3d &bbx_min,
                      const octomap::point3d &bbx_max);
@@ -160,8 +170,8 @@ public:
   void MergeMap2D();
   void Merge3DVoxelAlongXUnitTest();
   void MergeMap3D();
-  float AstarPathDistance(const Eigen::Vector3f &start_p,
-                          const Eigen::Vector3f &end_p);
+  GridAstarOutput AstarPathDistance(const Eigen::Vector3f &start_p,
+                                    const Eigen::Vector3f &end_p);
   float BlockPathDistance(const Eigen::Vector3f &start_p,
                           const Eigen::Vector3f &end_p);
   float BlockPathRefine(const std::vector<int> &block_path,
@@ -169,10 +179,11 @@ public:
                         const Eigen::Vector3f &end_p);
 
   std::pair<Eigen::Matrix4f, Eigen::Vector4f>
-  GetCost(const Eigen::Vector4f &xu, const float y_lb, const float y_ub,
-          const float z_lb, const float z_ub);
-  float GetRealCost(const Eigen::Vector4f &xu, const float y_lb,
-                    const float y_ub, const float z_lb, const float z_ub);
+  GetCost(const Eigen::Vector4f &xu, const float x_delta, const float y_lb,
+          const float y_ub, const float z_lb, const float z_ub);
+  float GetRealCost(const Eigen::Vector4f &xu, const float x_delta,
+                    const float y_lb, const float y_ub, const float z_lb,
+                    const float z_ub);
   std::pair<Eigen::Matrix4f, Eigen::Vector4f>
   GetTermCost(const Eigen::Vector4f &xu, const float target_y,
               const float target_z);

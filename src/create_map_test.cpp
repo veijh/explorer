@@ -1,5 +1,5 @@
-#include "m3_explorer/grid_astar.h"
-#include "m3_explorer/time_track.hpp"
+#include "explorer/grid_astar.h"
+#include "explorer/time_track.hpp"
 #include <Eigen/Dense>
 #include <fstream>
 #include <iostream>
@@ -106,7 +106,7 @@ int main(int argc, char **argv) {
     std::cout << "Here is the example map:\n" << out.c_str() << std::endl;
 
     std::ofstream file;
-    file.open("/src/catkin_ws/src/m3_explorer/forest.yaml");
+    file.open("/src/catkin_ws/src/explorer/forest.yaml");
     file << out.c_str();
     file.close();
   }
