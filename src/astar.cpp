@@ -1,4 +1,4 @@
-#include "m3_explorer/astar.h"
+#include "explorer/astar.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -143,7 +143,8 @@ float Astar::calc_h_score(const Eigen::Vector3f &start_p,
 bool Astar::is_path_valid(const octomap::OcTree *ocmap,
                           const Eigen::Vector3f &cur_pos,
                           const Eigen::Vector3f &next_pos) {
-  octomap::OcTreeNode *oc_node = ocmap->search(next_pos.x(), next_pos.y(), next_pos.z());
+  octomap::OcTreeNode *oc_node =
+      ocmap->search(next_pos.x(), next_pos.y(), next_pos.z());
   if (oc_node == nullptr) {
     // cout << "unknown" << endl;
     return false;

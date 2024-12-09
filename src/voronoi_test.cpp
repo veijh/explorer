@@ -1,6 +1,6 @@
-#include "m3_explorer/dynamicvoronoi.h"
-#include "m3_explorer/grid_astar.h"
-#include "m3_explorer/time_track.hpp"
+#include "explorer/dynamicvoronoi.h"
+#include "explorer/grid_astar.h"
+#include "explorer/time_track.hpp"
 #include <Eigen/Dense>
 #include <cstdio>
 #include <filesystem>

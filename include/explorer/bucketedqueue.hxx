@@ -1,4 +1,4 @@
-#include "m3_explorer/bucketedqueue.h"
+#include "explorer/bucketedqueue.h"
 
 #include "limits.h"
 #include <stdio.h>

@@ -83,6 +83,13 @@ struct iLQROutput {
   float path_length;
 };
 
+struct iLQRTrajectory {
+  std::vector<std::pair<float, float>> traj;
+  int num_iter;
+  float traj_length;
+  float total_time;
+};
+
 //! A DynamicVoronoi3D object computes and updates a distance map and Voronoi
 //! diagram.
 class DynamicVoronoi3D {
@@ -156,7 +163,7 @@ public:
   // Generate sparse graph.
   void ConstructSparseGraph();
   void ConstructSparseGraphBK();
-  //
+  // Get A* path from start to goal.
   AstarOutput GetAstarPath(const IntPoint3D &start, const IntPoint3D &goal);
   // Get sparse graph.
   const VGraph3D &GetSparseGraph() const;
@@ -169,7 +176,7 @@ public:
   // Calculate the heuristic value for A* search.
   float GetHeuristic(const IntPoint3D &start, const IntPoint3D &goal) const;
 
-  // iLQR related methods.
+  // iLQR Path related methods.
   iLQROutput GetiLQRPath(const std::vector<IntPoint3D> &path);
   std::pair<Eigen::Matrix<float, 6, 6>, Eigen::Matrix<float, 6, 1>>
   GetCost(const Eigen::Matrix<float, 6, 1> &xu, const IntPoint3D &bubble_1,
@@ -183,6 +190,8 @@ public:
   GetTermCost(const Eigen::Matrix<float, 6, 1> &xu, const IntPoint3D &goal);
   float GetRealTermCost(const Eigen::Matrix<float, 6, 1> &xu,
                         const IntPoint3D &goal);
+
+  // iLQR Trajectory related methods.
 
   // Graph related methods.
   void SparseAddTwoWayEdge(const IntPoint3D &core, const IntPoint3D &add,

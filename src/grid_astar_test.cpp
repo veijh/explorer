@@ -1,5 +1,5 @@
-#include "m3_explorer/grid_astar.h"
-#include "m3_explorer/time_track.hpp"
+#include "explorer/grid_astar.h"
+#include "explorer/time_track.hpp"
 #include <Eigen/Dense>
 #include <geometry_msgs/Point.h>
 #include <octomap/octomap.h>

@@ -1,6 +1,6 @@
 #ifndef FRONTIER_DETECTOR_H
 #define FRONTIER_DETECTOR_H
-#include "m3_explorer/QuadMesh.h"
+#include "explorer/QuadMesh.h"
 #include <geometry_msgs/PointStamped.h>
 #include <octomap/octomap.h>
 #include <ros/ros.h>

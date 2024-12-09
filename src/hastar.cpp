@@ -1,4 +1,4 @@
-#include "m3_explorer/hastar.h"
+#include "explorer/hastar.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>

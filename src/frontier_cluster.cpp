@@ -1,7 +1,6 @@
-#include "m3_explorer/frontier_cluster.h"
-
-#include "m3_explorer/frontier_detector.h"
-#include "m3_explorer/kd_tree.h"
+#include "explorer/frontier_cluster.h"
+#include "explorer/frontier_detector.h"
+#include "explorer/kd_tree.h"
 #include <geometry_msgs/Pose.h>
 #include <random>
 #include <tf2/LinearMath/Quaternion.h>

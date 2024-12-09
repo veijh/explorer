@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(m3_explorer)
+project(explorer)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
 add_compile_options(-std=c++17)
@@ -121,7 +121,7 @@ generate_messages(
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
 #  INCLUDE_DIRS include
-#  LIBRARIES m3_explorer
+#  LIBRARIES explorer
 #  CATKIN_DEPENDS roscpp rospy std_msgs
 #  DEPENDS system_lib
 )
@@ -169,7 +169,7 @@ add_dependencies(${PROJECT_NAME}_lib ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catki
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
-add_executable(${PROJECT_NAME} src/m3_explorer.cpp)
+add_executable(${PROJECT_NAME} src/explorer.cpp)
 add_executable(analyze src/analyze.cpp)
 add_executable(control_test src/control_test.cpp src/hastar.cpp src/astar.cpp)
 add_executable(mavros_ctrl src/mavros_ctrl.cpp)
@@ -338,7 +338,7 @@ target_link_libraries(create_building_test
 #############
 
 ## Add gtest based cpp test target and link libraries
-# catkin_add_gtest(${PROJECT_NAME}-test test/test_m3_explorer.cpp)
+# catkin_add_gtest(${PROJECT_NAME}-test test/test_explorer.cpp)
 # if(TARGET ${PROJECT_NAME}-test)
 #   target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME})
 # endif()

@@ -1,10 +1,10 @@
+#include "explorer/Traj.h"
+#include "explorer/frontier_cluster.h"
+#include "explorer/frontier_detector.h"
+#include "explorer/hastar.h"
+#include "explorer/path_planning.h"
+#include "explorer/time_track.hpp"
 #include "lkh_ros/Solve.h"
-#include "m3_explorer/Traj.h"
-#include "m3_explorer/frontier_cluster.h"
-#include "m3_explorer/frontier_detector.h"
-#include "m3_explorer/hastar.h"
-#include "m3_explorer/path_planning.h"
-#include "m3_explorer/time_track.hpp"
 #include <Eigen/Dense>
 #include <cmath>
 #include <geometry_msgs/PointStamped.h>
@@ -155,7 +155,7 @@ void offboard_takeoff(ros::NodeHandle &nh, const double &height) {
 }
 
 int main(int argc, char **argv) {
-  ros::init(argc, argv, "m3_explorer");
+  ros::init(argc, argv, "explorer");
   ros::NodeHandle nh("");
 
   double resolution = 0.1, sensor_range = 50.0;
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
   ros::Publisher history_path_pub =
       nh.advertise<visualization_msgs::Marker>("history_path", 10);
   // traj pub
-  ros::Publisher traj_pub = nh.advertise<m3_explorer::Traj>("traj", 10);
+  ros::Publisher traj_pub = nh.advertise<explorer::Traj>("traj", 10);
 
   // lkh client
   ros::ServiceClient lkh_client = nh.serviceClient<lkh_ros::Solve>("lkh_solve");
@@ -400,7 +400,7 @@ int main(int argc, char **argv) {
 
             if (is_planned) {
               // send traj
-              m3_explorer::Traj send_traj;
+              explorer::Traj send_traj;
               mavros_msgs::PositionTarget target_pose;
               target_pose.header.frame_id = "map";
               target_pose.header.stamp = ros::Time::now();

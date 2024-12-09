@@ -1,6 +1,6 @@
 #ifndef GRID_ASTAR_H
 #define GRID_ASTAR_H
-#include "m3_explorer/block.h"
+#include "explorer/block.h"
 #include <Eigen/Dense>
 #include <octomap/octomap.h>
 #include <ros/ros.h>

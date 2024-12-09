@@ -1,9 +1,9 @@
+#include "explorer/Traj.h"
+#include "explorer/frontier_cluster.h"
+#include "explorer/frontier_detector.h"
+#include "explorer/hastar.h"
+#include "explorer/path_planning.h"
 #include "lkh_ros/Solve.h"
-#include "m3_explorer/Traj.h"
-#include "m3_explorer/frontier_cluster.h"
-#include "m3_explorer/frontier_detector.h"
-#include "m3_explorer/hastar.h"
-#include "m3_explorer/path_planning.h"
 #include <Eigen/Dense>
 #include <cmath>
 #include <geometry_msgs/PointStamped.h>
@@ -35,14 +35,14 @@ tf2_ros::Buffer tf_buffer;
 
 using namespace std;
 
-octomap::OcTree* ocmap = nullptr;
+octomap::OcTree *ocmap = nullptr;
 void octomap_cb(const octomap_msgs::Octomap::ConstPtr &msg) {
   delete ocmap;
   ocmap = dynamic_cast<octomap::OcTree *>(msgToMap(*msg));
 }
 
 int main(int argc, char **argv) {
-  ros::init(argc, argv, "m3_explorer");
+  ros::init(argc, argv, "explorer");
   ros::NodeHandle nh("");
 
   double resolution = 0.1, sensor_range = 5.0;
@@ -67,7 +67,8 @@ int main(int argc, char **argv) {
   ros::Publisher view_point_pub =
       nh.advertise<geometry_msgs::PoseArray>("/uav0/view_point", 10);
   // get octomap
-  ros::Subscriber uav0_octomap_sub = nh.subscribe<octomap_msgs::Octomap>("/uav0/octomap_binary", 1, octomap_cb);
+  ros::Subscriber uav0_octomap_sub = nh.subscribe<octomap_msgs::Octomap>(
+      "/uav0/octomap_binary", 1, octomap_cb);
 
   // marker template
   visualization_msgs::Marker marker;
@@ -114,8 +115,7 @@ int main(int argc, char **argv) {
     frontier_detect(frontiers, ocmap, cam_o_in_map, sensor_range);
 
     ros::Duration elapsed_time = ros::Time::now() - current_time;
-    cout << "[frontier detect]: " << elapsed_time.toSec() * 1000.0
-         << " ms, ";
+    cout << "[frontier detect]: " << elapsed_time.toSec() * 1000.0 << " ms, ";
     cout << "[voxel num]: " << frontiers.size() << endl;
     frontier_visualize(frontiers, 0.1, frontier_maker_array_pub);
     frontier_normal_visualize(frontiers, frontier_normal_pub);
@@ -125,13 +125,13 @@ int main(int argc, char **argv) {
     vector<Cluster> cluster_vec;
     geometry_msgs::PoseArray vp_array;
 
-    if (!frontiers.empty()){
+    if (!frontiers.empty()) {
       cluster_vec = dbscan_cluster(frontiers, 0.4, 8, 8, cluster_vis_pub);
       vp_array = view_point_generate(cluster_vec, ocmap);
       cout << "[frontier cluster]: "
-            << (ros::Time::now() - current_time).toSec() * 1000.0 << " ms"
-            << endl;
-      
+           << (ros::Time::now() - current_time).toSec() * 1000.0 << " ms"
+           << endl;
+
       cluster_visualize(cluster_vec, cluster_pub);
       view_point_pub.publish(vp_array);
     }

@@ -1,5 +1,5 @@
-#include "m3_explorer/dynamicvoronoi3D.h"
-#include "m3_explorer/time_track.hpp"
+#include "explorer/dynamicvoronoi3D.h"
+#include "explorer/time_track.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1289,7 +1289,6 @@ int DynamicVoronoi3D::GetSquaredDistanceBetween(const IntPoint3D &p1,
   return dx * dx + dy * dy + dz * dz;
 }
 
-// Calculate the heuristic value for A* search.
 float DynamicVoronoi3D::GetHeuristic(const IntPoint3D &start,
                                      const IntPoint3D &goal) const {
   return GetDistanceBetween(start, goal);

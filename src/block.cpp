@@ -1,5 +1,5 @@
-#include "m3_explorer/block.h"
-#include "m3_explorer/time_track.hpp"
+#include "explorer/block.h"
+#include "explorer/time_track.hpp"
 #include <cmath>
 
 Block2D::Block2D(const int y, const RangeVoxel &range)

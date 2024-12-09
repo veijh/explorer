@@ -1,6 +1,6 @@
-#include "m3_explorer/dynamicvoronoi3D.h"
-#include "m3_explorer/grid_astar.h"
-#include "m3_explorer/time_track.hpp"
+#include "explorer/dynamicvoronoi3D.h"
+#include "explorer/grid_astar.h"
+#include "explorer/time_track.hpp"
 #include <Eigen/Dense>
 #include <cstdio>
 #include <filesystem>
@@ -16,12 +16,12 @@
 #include <visualization_msgs/MarkerArray.h>
 
 namespace {
-const float min_x = -25.0;
-const float max_x = 25.0;
-const float min_y = -25.0;
-const float max_y = 25.0;
+const float min_x = -15.0;
+const float max_x = 15.0;
+const float min_y = -15.0;
+const float max_y = 15.0;
 const float resolution = 0.1;
-const int num_floors = 3;
+const int num_floors = 1;
 const int floor_height = 30;
 const int floor_thickness = 3;
 const int num_office = 5;

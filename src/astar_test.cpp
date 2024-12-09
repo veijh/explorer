@@ -1,4 +1,4 @@
-#include "m3_explorer/astar.h"
+#include "explorer/astar.h"
 #include <Eigen/Dense>
 #include <chrono>
 #include <geometry_msgs/Point.h>

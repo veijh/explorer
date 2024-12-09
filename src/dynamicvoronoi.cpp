@@ -1,5 +1,5 @@
-#include "m3_explorer/dynamicvoronoi.h"
-#include "m3_explorer/time_track.hpp"
+#include "explorer/dynamicvoronoi.h"
+#include "explorer/time_track.hpp"
 
 #include <algorithm>
 #include <cmath>
