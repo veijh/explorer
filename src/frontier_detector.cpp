@@ -1,4 +1,16 @@
 #include "m3_explorer/frontier_detector.h"
+
+#include <Eigen/Dense>
+#include <cmath>
+#include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/TransformStamped.h>
+#include <queue>
+#include <sys/time.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <unordered_map>
+#include <utility>
+#include <visualization_msgs/MarkerArray.h>
+
 void frontier_detect(set<QuadMesh> &frontiers, octomap::OcTree *ocmap,
                      const geometry_msgs::PointStamped &cur_pose,
                      const double &sensor_range) {
@@ -6,14 +18,14 @@ void frontier_detect(set<QuadMesh> &frontiers, octomap::OcTree *ocmap,
   if (!frontiers.empty() && ocmap != nullptr) {
     auto it = frontiers.begin();
     while (it != frontiers.end()) {
-      if (abs(it->center.x() - cur_pose.point.x) > sensor_range) {
-        it++;
-        continue;
-      }
-      if (abs(it->center.y() - cur_pose.point.y) > sensor_range) {
-        it++;
-        continue;
-      }
+      // if (abs(it->center.x() - cur_pose.point.x) > sensor_range) {
+      //   it++;
+      //   continue;
+      // }
+      // if (abs(it->center.y() - cur_pose.point.y) > sensor_range) {
+      //   it++;
+      //   continue;
+      // }
 
       if (ocmap->search(it->center) != nullptr) {
         it = frontiers.erase(it);
@@ -157,8 +169,8 @@ void frontier_visualize(set<QuadMesh> &frontiers, const double &mesh_thickness,
   marker.pose.orientation.y = 0.0;
   marker.pose.orientation.z = 0.0;
   std_msgs::ColorRGBA color;
-  color.r = 1.0;
-  color.g = 0.0;
+  color.r = 0.0;
+  color.g = 1.0;
   color.b = 0.0;
   color.a = 1.0;
   marker.color = color;

@@ -1,3 +1,5 @@
 
 *.atsp
 *.tour
+*.par
+*.bag

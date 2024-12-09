@@ -1,0 +1,12 @@
+<launch>
+    <arg name="ID" default="0"/>
+    <arg name="namespace" default="uav$(arg ID)"/>
+    <group ns = "$(arg namespace)">
+        <param name="ID" value = "$(arg ID)"/>
+        <param name="Lkh_Path" value="$(find lkh_ros)/LKH/LKH"/>
+        <node name="lkh_ros" pkg="lkh_ros" type="lkh_ros" respawn="false" output="log"/>
+        <param name="Problem_Path" value="$(find m3_explorer)/tour/$(arg namespace)"/>
+        <node name="m3_explorer" pkg="m3_explorer" type="m3_explorer" respawn="false" output="screen"/>
+        <node name="mavros_ctrl" pkg="m3_explorer" type="mavros_ctrl" respawn="false" output="screen"/>
+    </group>
+</launch>

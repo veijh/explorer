@@ -2,9 +2,10 @@ cmake_minimum_required(VERSION 3.0.2)
 project(m3_explorer)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
-# add_compile_options(-std=c++11)
+add_compile_options(-std=c++17)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+# add_definitions("-g")
 
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
@@ -27,8 +28,9 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(Eigen3 REQUIRED)
 
 ## System dependencies are found with CMake's conventions
-# find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost REQUIRED)
 
+find_package(yaml-cpp REQUIRED)
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -137,23 +139,35 @@ include_directories(
 add_definitions(${EIGEN_DEFINITIONS})
 
 ## Declare a C++ library
-# add_library(${PROJECT_NAME}
-#   src/${PROJECT_NAME}/m3_explorer.cpp
-# )
+add_library(${PROJECT_NAME}_lib
+  src/frontier_detector.cpp
+  src/frontier_cluster.cpp
+  src/path_planning.cpp
+  src/kd_tree.cpp
+  src/hastar.cpp
+  src/astar.cpp
+  src/octo_astar.cpp
+  src/grid_astar.cpp
+  src/block.cpp
+)
 
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries
 ## either from message generation or dynamic reconfigure
-# add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(${PROJECT_NAME}_lib ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
-add_executable(${PROJECT_NAME} src/m3_explorer.cpp src/frontier_detector.cpp src/frontier_cluster.cpp src/path_planning.cpp src/kd_tree.cpp src/hastar.cpp)
+add_executable(${PROJECT_NAME} src/m3_explorer.cpp)
 add_executable(analyze src/analyze.cpp)
-add_executable(control_test src/control_test.cpp src/hastar.cpp)
+add_executable(control_test src/control_test.cpp src/hastar.cpp src/astar.cpp)
 add_executable(mavros_ctrl src/mavros_ctrl.cpp)
-
+add_executable(map_merge src/map_merge.cpp)
+add_executable(frontier_test src/frontier_test.cpp)
+add_executable(octo_astar_test src/octo_astar_test.cpp)
+add_executable(grid_astar_test src/grid_astar_test.cpp)
+add_executable(create_map_test src/create_map_test.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -163,13 +177,15 @@ add_executable(mavros_ctrl src/mavros_ctrl.cpp)
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above
-# add_dependencies(${PROJECT_NAME}_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(mavros_ctrl ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(${PROJECT_NAME}
   ${catkin_LIBRARIES}
   ${tf2_LIBRARIES}
   ${tf2_ros_LIBRARIES}
+  ${PROJECT_NAME}_lib
 )
 
 target_link_libraries(analyze
@@ -182,6 +198,33 @@ target_link_libraries(control_test
 
 target_link_libraries(mavros_ctrl
   ${catkin_LIBRARIES}
+)
+
+target_link_libraries(map_merge
+  ${catkin_LIBRARIES}
+)
+
+target_link_libraries(frontier_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+)
+
+target_link_libraries(octo_astar_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+)
+
+target_link_libraries(grid_astar_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+)
+
+target_link_libraries(create_map_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
 )
 
 #############

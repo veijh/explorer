@@ -6,6 +6,10 @@
 #include <mavros_msgs/PositionTarget.h>
 #include <math.h>
 #include "m3_explorer/hastar.h"
+#include "m3_explorer/astar.h"
+#include <octomap/octomap.h>
+#include <octomap_msgs/Octomap.h>
+#include <octomap_msgs/conversions.h>
 
 class CircleTrajectory {
 public:
@@ -23,10 +27,10 @@ public:
     void run() {
         ros::Publisher sp_pub = nh.advertise<geometry_msgs::PoseStamped>("/uav0/mavros/setpoint", 10);
 
-        Hastar planning;
-        cout << "start planning" << endl;
-        planning.search_path(nullptr, Eigen::Vector3f(0.0, 0.0, 2.0), Eigen::Vector3f(2.0, 10.0, 2.0), 0.0);
-        cout << "end" << endl;
+        // Hastar planning;
+        // cout << "start planning" << endl;
+        // planning.search_path(nullptr, Eigen::Vector3f(0.0, 0.0, 2.0), Eigen::Vector3f(2.0, 10.0, 2.0), 0.0);
+        // cout << "end" << endl;
 
         ros::Rate rate(20.0);
         while (ros::ok() && !current_state.connected) {
@@ -36,14 +40,14 @@ public:
 
         geometry_msgs::PoseStamped sp;
         sp.header.frame_id = "map";
-        sp.pose.position.z = 2.0;
+        sp.pose.position.z = 1.5;
         sp.pose.orientation.w = 1.0;
 
         mavros_msgs::PositionTarget target_pose;
         target_pose.header.frame_id = "map";
         target_pose.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
         target_pose.type_mask = 0;
-        target_pose.position.z = 2.0;
+        target_pose.position.z = 1.5;
 
         ros::Time last_request = ros::Time::now();
         ros::Time start = ros::Time::now();
@@ -84,22 +88,22 @@ public:
             // target_pose.acceleration_or_force.x = 2.0 * 1.0 /2.0 * 1.0 /2.0 * -cos( 1.0 /2.0 * ros::Time::now().toSec());
             // target_pose.acceleration_or_force.y = 2.0 * 1.0 /2.0 * 1.0 /2.0 * -sin( 1.0 /2.0 * ros::Time::now().toSec());
 
-            target_pose.header.stamp = sp.header.stamp = ros::Time::now();
-            target_pose.position.x = sp.pose.position.x = planning.traj[count].pos.x();
-            target_pose.position.y = sp.pose.position.y = planning.traj[count].pos.y();
-            target_pose.position.z = sp.pose.position.z = planning.traj[count].pos.z();
+            // target_pose.header.stamp = sp.header.stamp = ros::Time::now();
+            // target_pose.position.x = sp.pose.position.x = planning.traj[count].pos.x();
+            // target_pose.position.y = sp.pose.position.y = planning.traj[count].pos.y();
+            // target_pose.position.z = sp.pose.position.z = planning.traj[count].pos.z();
 
-            target_pose.velocity.x = planning.traj[count].vel.x();
-            target_pose.velocity.y = planning.traj[count].vel.y();
-            target_pose.velocity.z = planning.traj[count].vel.z();
+            // target_pose.velocity.x = planning.traj[count].vel.x();
+            // target_pose.velocity.y = planning.traj[count].vel.y();
+            // target_pose.velocity.z = planning.traj[count].vel.z();
 
-            target_pose.acceleration_or_force.x = planning.traj[count].acc.x();
-            target_pose.acceleration_or_force.y = planning.traj[count].acc.y();
-            target_pose.acceleration_or_force.z = planning.traj[count].acc.z();
+            // target_pose.acceleration_or_force.x = planning.traj[count].acc.x();
+            // target_pose.acceleration_or_force.y = planning.traj[count].acc.y();
+            // target_pose.acceleration_or_force.z = planning.traj[count].acc.z();
 
-            target_pose.yaw = planning.traj[count].yaw;
+            // target_pose.yaw = planning.traj[count].yaw;
             
-            if(current_state.armed && count < planning.traj.size() -1) count++;
+            // if(current_state.armed && count < planning.traj.size() -1) count++;
 
             local_pos_pub.publish(target_pose);
             sp_pub.publish(sp);

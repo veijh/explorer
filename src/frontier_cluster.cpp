@@ -1,4 +1,13 @@
 #include "m3_explorer/frontier_cluster.h"
+
+#include "m3_explorer/frontier_detector.h"
+#include "m3_explorer/kd_tree.h"
+#include <geometry_msgs/Pose.h>
+#include <random>
+#include <tf2/LinearMath/Quaternion.h>
+#include <unordered_map>
+#include <visualization_msgs/MarkerArray.h>
+
 vector<Cluster> k_mean_cluster(set<QuadMesh> &frontiers) {
   // dynamic cluster num
   const int num_frontiers = frontiers.size();
@@ -218,6 +227,7 @@ vector<Cluster> dbscan_cluster(set<QuadMesh> &frontiers, const float &eps,
       while (!cluster_q.empty()) {
 
         KdTree *cluster_node = cluster_q.front();
+        cluster_q.pop();
         is_node_visited[cluster_node] = true;
         priority_queue<pair<float, KdTree *>, vector<pair<float, KdTree *>>,
                        KdTree::CustomCompare>
@@ -251,7 +261,9 @@ vector<Cluster> dbscan_cluster(set<QuadMesh> &frontiers, const float &eps,
             nbr_queue.pop();
           }
         }
-        cluster_q.pop();
+        if (count > 500) {
+          break;
+        }
       }
 
       if (count >= min_cluster_pts) {

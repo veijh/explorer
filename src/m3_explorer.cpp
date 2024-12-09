@@ -4,6 +4,7 @@
 #include "m3_explorer/frontier_detector.h"
 #include "m3_explorer/hastar.h"
 #include "m3_explorer/path_planning.h"
+#include "m3_explorer/time_track.hpp"
 #include <Eigen/Dense>
 #include <cmath>
 #include <geometry_msgs/PointStamped.h>
@@ -21,6 +22,7 @@
 #include <ros/ros.h>
 #include <set>
 #include <std_msgs/Float32MultiArray.h>
+#include <string>
 #include <sys/time.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
@@ -35,17 +37,20 @@ enum PLAN_FSM { WAIT = 0, PLAN, EXEC };
 
 Hastar planning;
 PLAN_FSM state = PLAN_FSM::PLAN;
+tf2_ros::Buffer tf_buffer;
 
 using namespace std;
 
-octomap::OcTree *ocmap;
+int self_id = 0;
+
+octomap::OcTree *ocmap = nullptr;
 void octomap_cb(const octomap_msgs::Octomap::ConstPtr &msg) {
-  // free memory for old map
   delete ocmap;
   ocmap = dynamic_cast<octomap::OcTree *>(msgToMap(*msg));
 }
 
 float cur_yaw = 0.0;
+// get UAV yaw from odom. note: it can merge to pos_cb
 void base_link_cb(const nav_msgs::Odometry::ConstPtr &msg) {
   tf2::Quaternion q(msg->pose.pose.orientation.x, msg->pose.pose.orientation.y,
                     msg->pose.pose.orientation.z, msg->pose.pose.orientation.w);
@@ -152,15 +157,9 @@ void offboard_takeoff(ros::NodeHandle &nh, const double &height) {
 int main(int argc, char **argv) {
   ros::init(argc, argv, "m3_explorer");
   ros::NodeHandle nh("");
-  // get octomap
-  ros::Subscriber octomap_sub =
-      nh.subscribe<octomap_msgs::Octomap>("octomap_full", 1, octomap_cb);
-  double resolution = 0.1, sensor_range = 5.0;
-  // get current pose
-  ros::Subscriber base_link_sub = nh.subscribe<nav_msgs::Odometry>(
-      "ground_truth/base_link", 1, base_link_cb);
 
-  tf2_ros::Buffer tf_buffer;
+  double resolution = 0.1, sensor_range = 50.0;
+
   tf2_ros::TransformListener tf_listener(tf_buffer);
   ros::Duration(1.0).sleep(); // 等待tf2变换树准备好
   ros::Rate rate(5);
@@ -193,7 +192,17 @@ int main(int argc, char **argv) {
     rate.sleep();
   }
 
-  // ego planner input: target pose
+  nh.getParam("ID", self_id);
+  cout << "[INFO] uav ID = " << self_id << endl;
+
+  // get octomap
+  ros::Subscriber uav0_octomap_sub =
+      nh.subscribe<octomap_msgs::Octomap>("/merged_map", 1, octomap_cb);
+  // get current pose
+  ros::Subscriber base_link_sub = nh.subscribe<nav_msgs::Odometry>(
+      "ground_truth/base_link", 1, base_link_cb);
+
+  // planner input: target pose
   ros::Publisher goal_pub =
       nh.advertise<geometry_msgs::PoseStamped>("goal", 10);
   ros::Publisher ctrl_state_pub =
@@ -245,7 +254,8 @@ int main(int argc, char **argv) {
 
     // lookup transform of 3 axises
     geometry_msgs::PointStamped cam_o_in_cam;
-    cam_o_in_cam.header.frame_id = "uav0_camera_depth_frame";
+    cam_o_in_cam.header.frame_id =
+        "uav" + to_string(self_id) + "_camera_depth_frame";
     cam_o_in_cam.point.x = 0.0;
     cam_o_in_cam.point.y = 0.0;
     cam_o_in_cam.point.z = 0.0;
@@ -261,71 +271,78 @@ int main(int argc, char **argv) {
       ROS_ERROR("Failed to transform point: %s", ex.what());
     }
 
+    vector<geometry_msgs::PointStamped> other_uav_poses;
+    geometry_msgs::PointStamped other_uav(cam_o_in_cam);
+    geometry_msgs::PointStamped other_uav_in_map;
+    for (int i = 0; i < 3; ++i) {
+      if (i != self_id) {
+        other_uav.header.frame_id =
+            "uav" + to_string(i) + "_camera_depth_frame";
+        try {
+          // 使用lookupTransform函数查询坐标变换
+          tf_buffer.transform(other_uav, other_uav_in_map, "map");
+        } catch (tf2::TransformException &ex) {
+          ROS_ERROR("Failed to transform point: %s", ex.what());
+        }
+        other_uav_poses.emplace_back(other_uav_in_map);
+      }
+    }
+
     //// input = octomap; current pose; FOV; max range; region bbx
     //// output = a set containing all frontier voxels
 
-    ros::Time current_time = ros::Time::now();
-    cout << "Time: " << (current_time - explore_start).toSec() << " s" << endl;
+    TimeTrack tracker;
 
     frontier_detect(frontiers, ocmap, cam_o_in_map, sensor_range);
     frontier_visualize(frontiers, 0.02, frontier_maker_array_pub);
     frontier_normal_visualize(frontiers, frontier_normal_pub);
 
-    ros::Duration elapsed_time = ros::Time::now() - current_time;
-    cout << "frontier detect using time: " << elapsed_time.toSec() * 1000.0
-         << " ms, ";
-    cout << "frontier voxel num is : " << frontiers.size() << endl;
+    tracker.OutputPassingTime("Frontier Detect");
+    cout << "[voxel num]: " << frontiers.size() << endl;
 
     vector<Cluster> cluster_vec;
     geometry_msgs::PoseArray vp_array;
 
     if (!frontiers.empty() && goal_exec == false) {
-      current_time = ros::Time::now();
+      tracker.SetStartTime();
       //// frontier clustering
       //// input = the set containing all frontier voxels
       //// output = a vector containing all frontier clusters
       // cluster_vec = k_mean_cluster(frontiers);
       cluster_vec = dbscan_cluster(frontiers, 0.4, 8, 8, cluster_vis_pub);
       cluster_visualize(cluster_vec, cluster_pub);
+      tracker.OutputPassingTime("Frontier Cluster");
 
-      cout << "frontier clusters generation using time: "
-           << (ros::Time::now() - current_time).toSec() * 1000.0 << " ms"
-           << endl;
-
-      current_time = ros::Time::now();
+      tracker.SetStartTime();
       //// generate view point
       //// input = a vector containing all frontier clusters
       //// output = a vector containing poses of all view points
       vp_array = view_point_generate(cluster_vec, ocmap);
       view_point_pub.publish(vp_array);
+      tracker.OutputPassingTime("Viewpoint Gen");
 
-      cout << "view points generation using time: "
-           << (ros::Time::now() - current_time).toSec() * 1000.0 << " ms"
-           << endl;
-
-      current_time = ros::Time::now();
+      tracker.SetStartTime();
       //// path planning
       //// input = current pose of uav && a vector containing poses of all view
-      ///points / output = a vector containing the sequence of waypoints
+      /// points / output = a vector containing the sequence of waypoints
       explore_path.poses.clear();
       if (vp_array.poses.size() > 2) {
-        explore_path =
-            atsp_path(cam_o_in_map, vp_array, lkh_client, problem_path);
+        explore_path = amtsp_path(ocmap, cam_o_in_map, other_uav_poses,
+                                  vp_array, lkh_client, problem_path);
+        // remove start point: cam_o_in_map
+        explore_path.poses.erase(explore_path.poses.begin());
       } else if (!vp_array.poses.empty()) {
         explore_path.poses.push_back(vp_array.poses[0]);
       } else {
         cout << "no space to explore !!" << endl;
       }
-
-      cout << "path planning using time: "
-           << (ros::Time::now() - current_time).toSec() * 1000.0 << " ms"
-           << endl;
-
       goal_exec = true;
+      tracker.OutputPassingTime("Tour Planning");
     }
 
     if (goal_exec) {
-      if (path_id >= explore_path.poses.size()) {
+      // receding horizon
+      if (path_id >= explore_path.poses.size() || path_id >= 1) {
         path_id = 0;
         goal_exec = false;
       } else {
@@ -348,8 +365,7 @@ int main(int argc, char **argv) {
         tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
         float target_yaw = (float)yaw;
 
-        if (is_next_to_obstacle(ocmap, target_point, 0.8, 0.8) ||
-            delta.norm() < 0.2) {
+        if (is_next_to_obstacle(ocmap, target_point, 0.8, 0.8)) {
           path_id++;
           state = PLAN_FSM::PLAN;
         } else {
@@ -357,26 +373,30 @@ int main(int argc, char **argv) {
           switch (state) {
           case PLAN_FSM::PLAN: {
             cout << "Searching Path" << endl;
+            tracker.SetStartTime();
             // Hybrid A* search path
             bool is_planned = planning.search_path(
                 ocmap,
                 Eigen::Vector3f(cam_o_in_map.point.x, cam_o_in_map.point.y,
                                 1.5),
                 Eigen::Vector3f(explore_path.poses[path_id].position.x,
-                                explore_path.poses[path_id].position.y,
-                                1.5),
+                                explore_path.poses[path_id].position.y, 1.5),
                 cur_yaw);
+            tracker.OutputPassingTime("Hybrid A*");
 
-            if(is_planned == false){
+            tracker.SetStartTime();
+            // re-search
+            if (is_planned == false) {
               is_planned = planning.search_path(
-                ocmap,
-                Eigen::Vector3f(cam_o_in_map.point.x - 0.4 * cos(cur_yaw), cam_o_in_map.point.y - 0.4 * sin(cur_yaw),
-                                1.5),
-                Eigen::Vector3f(explore_path.poses[path_id].position.x,
-                                explore_path.poses[path_id].position.y,
-                                1.5),
-                cur_yaw);
+                  ocmap,
+                  Eigen::Vector3f(cam_o_in_map.point.x - 0.4 * cos(cur_yaw),
+                                  cam_o_in_map.point.y - 0.4 * sin(cur_yaw),
+                                  1.5),
+                  Eigen::Vector3f(explore_path.poses[path_id].position.x,
+                                  explore_path.poses[path_id].position.y, 1.5),
+                  cur_yaw);
             }
+            tracker.OutputPassingTime("Hybrid A* Replan");
 
             if (is_planned) {
               // send traj
@@ -408,6 +428,7 @@ int main(int argc, char **argv) {
                 send_traj.traj.push_back(target_pose);
               }
 
+              // set target yaw at end_p
               target_pose.yaw = target_yaw;
               send_traj.traj.push_back(target_pose);
 

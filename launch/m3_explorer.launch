@@ -1,10 +1,9 @@
 <launch>
-    <group ns = "uav0">
-        <param name="Lkh_Path" value="$(find lkh_ros)/LKH/LKH"/>
-        <node name="lkh_ros" pkg="lkh_ros" type="lkh_ros" respawn="false" output="log"/>
+    <include file="$(find m3_explorer)/launch/single_explorer.launch">
+        <arg name="ID" value="0"/>
+    </include>
 
-        <param name="Problem_Path" value="$(find m3_explorer)/tour"/>
-        <node name="m3_explorer" pkg="m3_explorer" type="m3_explorer" respawn="false" output="screen"/>
-        <node name="mavros_ctrl" pkg="m3_explorer" type="mavros_ctrl" respawn="false" output="screen"/>
-    </group>
+    <include file="$(find m3_explorer)/launch/single_explorer.launch">
+        <arg name="ID" value="1"/>
+    </include>
 </launch>
