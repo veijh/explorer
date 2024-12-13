@@ -263,7 +263,7 @@ void create_stair(
 }
 
 int main(int argc, char *argv[]) {
-  ros::init(argc, argv, "voronoi_test");
+  ros::init(argc, argv, "voronoi3D_test");
   ros::NodeHandle nh("");
 
   ros::Rate rate(1);
