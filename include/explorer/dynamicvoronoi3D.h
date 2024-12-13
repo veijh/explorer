@@ -84,7 +84,7 @@ struct iLQROutput {
 };
 
 struct iLQRTrajectory {
-  std::vector<std::pair<float, float>> traj;
+  std::vector<Eigen::Matrix<float, 13, 1>> traj;
   int num_iter;
   float traj_length;
   float total_time;
@@ -192,6 +192,27 @@ public:
                         const IntPoint3D &goal);
 
   // iLQR Trajectory related methods.
+  iLQRTrajectory GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
+                                   const std::vector<IntPoint3D> &ilqr_path);
+  Eigen::Matrix<float, 9, 13>
+  GetTransition(const Eigen::Matrix<float, 13, 1> &xu);
+  Eigen::Matrix<float, 9, 1>
+  GetRealTransition(const Eigen::Matrix<float, 13, 1> &xu);
+  std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>
+  GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu, const IntPoint3D &bubble_1,
+              const float radius_1, const IntPoint3D &bubble_2,
+              const float radius_2, const float max_vel, const float max_acc,
+              const float coeff);
+  float GetTrajRealCost(const Eigen::Matrix<float, 13, 1> &xu,
+                        const IntPoint3D &bubble_1, const float radius_1,
+                        const IntPoint3D &bubble_2, const float radius_2,
+                        const float max_vel, const float max_acc,
+                        const float coeff);
+  std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>
+  GetTrajTermCost(const Eigen::Matrix<float, 13, 1> &xu,
+                  const IntPoint3D &goal);
+  float GetTrajRealTermCost(const Eigen::Matrix<float, 13, 1> &xu,
+                            const IntPoint3D &goal);
 
   // Graph related methods.
   void SparseAddTwoWayEdge(const IntPoint3D &core, const IntPoint3D &add,

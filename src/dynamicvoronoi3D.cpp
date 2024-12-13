@@ -10,12 +10,16 @@
 namespace {
 constexpr int kMaxIteration = 500;
 constexpr float kConvergenceThreshold = 0.05f;
-constexpr float kTermWeight = 1000.0;
-constexpr float kBndWeight = 10000.0;
-constexpr float kWeight = 100.0;
+constexpr float kTermWeight = 1000.0f;
+constexpr float kBndWeight = 10000.0f;
+constexpr float kWeight = 100.0f;
+constexpr float kSmoothWeight = 0.0f;
+constexpr float kTimeWeight = 1.0f;
 constexpr int kMaxLineSearchIter = 10;
 constexpr int kDeadEndThreshold = 10;
 constexpr int kObstacleWaveInibitDistance = 5;
+constexpr float kMaxVelocity = 15.0f;
+constexpr float kMaxAcceleration = 10.0f;
 } // namespace
 
 const std::vector<IntPoint3D> nbr_offsets = {
@@ -1412,5 +1416,682 @@ float DynamicVoronoi3D::GetRealTermCost(const Eigen::Matrix<float, 6, 1> &xu,
                kTermWeight * 0.5 * dz * dz;
   real_cost += kWeight * 0.5 * xu(3) * xu(3) + kWeight * 0.5 * xu(4) * xu(4) +
                kWeight * 0.5 * xu(5) * xu(5);
+  return real_cost;
+}
+
+iLQRTrajectory
+DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
+                                    const std::vector<IntPoint3D> &ilqr_path) {
+  iLQRTrajectory ilqr_traj;
+  std::vector<Eigen::Matrix<float, 13, 1>> traj;
+  TimeTrack track;
+  if (path.empty() || path.size() < 2) {
+    return ilqr_traj;
+  }
+  // Construct the constraints.
+  const int num_bubbles = path.size() - 2;
+  std::vector<IntPoint3D> bubbles(path.begin() + 1, path.end() - 1);
+  std::vector<float> radius;
+  radius.reserve(num_bubbles);
+  for (int i = 0; i < num_bubbles; ++i) {
+    radius.emplace_back(getDistance(bubbles[i].x, bubbles[i].y, bubbles[i].z));
+  }
+  // iLQR Path Optimization.
+  const int num_steps = path.size() - 1;
+  std::vector<Eigen::Matrix<float, 9, 13>> F_mats(
+      num_steps, Eigen::Matrix<float, 9, 13>::Zero());
+  std::vector<Eigen::Matrix<float, 4, 9>> K_mats(
+      num_steps, Eigen::Matrix<float, 4, 9>::Zero());
+  std::vector<Eigen::Matrix<float, 4, 1>> k_vecs(
+      num_steps, Eigen::Matrix<float, 4, 1>::Zero());
+  std::vector<Eigen::Matrix<float, 13, 1>> xu_vecs(
+      num_steps, Eigen::Matrix<float, 13, 1>::Zero());
+  std::vector<Eigen::Matrix<float, 9, 1>> x_hat_vecs(
+      num_steps, Eigen::Matrix<float, 9, 1>::Zero());
+  std::vector<float> coeff(num_steps, 0.0f);
+  track.OutputPassingTime("Initialize");
+  // Construct the initial guess.
+  std::cout << "Construct the initial guess..." << std::endl;
+  const IntPoint3D start = path.front();
+  const IntPoint3D goal = path.back();
+
+  // clang-format off
+  xu_vecs[0] << 
+  start.x, 0.0f, 0.0f,
+  start.y, 0.0f, 0.0f,
+  start.z, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 1.0f;
+  x_hat_vecs[0] << 
+  start.x, 0.0f, 0.0f,
+  start.y, 0.0f, 0.0f,
+  start.z, 0.0f, 0.0f;
+  // clang-format on
+
+  for (int i = 1; i < num_steps - 1; ++i) {
+    const float delta_c = GetDistanceBetween(bubbles[i - 1], bubbles[i]);
+    const float dist =
+        0.5f * (delta_c + (radius[i - 1] + radius[i]) *
+                              (radius[i - 1] - radius[i]) / delta_c);
+    const float x_initial =
+        bubbles[i - 1].x + dist / delta_c * (bubbles[i].x - bubbles[i - 1].x);
+    const float y_initial =
+        bubbles[i - 1].y + dist / delta_c * (bubbles[i].y - bubbles[i - 1].y);
+    const float z_initial =
+        bubbles[i - 1].z + dist / delta_c * (bubbles[i].z - bubbles[i - 1].z);
+    // clang-format off
+    xu_vecs[i] << 
+    x_initial, 0.0f, 0.0f,
+    y_initial, 0.0f, 0.0f,
+    z_initial, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 1.0f;
+    // clang-format on
+  }
+  // clang-format off
+  xu_vecs[num_steps - 1] << 
+  goal.x, 0.0f, 0.0f,
+  goal.y, 0.0f, 0.0f,
+  goal.z, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 1.0f;
+  // clang-format on
+
+  // for (int i = 0; i < num_steps; ++i) {
+  //   // clang-format off
+  //   x_hat_vecs[i] <<
+  //   ilqr_path[i].x, 0.0f, 0.0f,
+  //   ilqr_path[i].y, 0.0f, 0.0f,
+  //   ilqr_path[i].z, 0.0f, 0.0f;
+  //   // clang-format on
+
+  //   // Initial Guess.
+  //   xu_vecs[i].block<9, 1>(0, 0) = x_hat_vecs[i];
+  //   xu_vecs[i].block<4, 1>(9, 0) << 0.0f, 0.0f, 0.0f, 1.0f;
+  // }
+
+  // Calculate the coefficents.
+  std::cout << "start ilqr optimization..." << std::endl;
+  bool is_ilqr_success = false;
+  float cost_sum = 0.0f;
+  float last_cost_sum = cost_sum;
+  float path_length = 0.0f;
+  float last_path_length = path_length;
+  float time_sum = 0.0f;
+  float last_time_sum = time_sum;
+  // Iteration Loop.
+  for (int iter = 0; iter < kMaxIteration; ++iter) {
+    Eigen::Matrix<float, 9, 9> V;
+    Eigen::Matrix<float, 9, 1> v;
+    cost_sum = 0.0f;
+    std::pair<float, float> delta_V(0.0f, 0.0f);
+    // Backward Pass.
+    // track.SetStartTime();
+    std::vector<
+        std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>>
+        costs(num_steps, std::make_pair(Eigen::Matrix<float, 13, 13>::Zero(),
+                                        Eigen::Matrix<float, 13, 1>::Zero()));
+    // Cost can be calculated in parallel.
+    // Update: Actually, in this case, it is not worthwhile to parallelize the
+    // cost. Time is mainly spent in the calculation of V and v.
+    costs[0] = GetTrajCost(xu_vecs[0], bubbles[0], radius[0], bubbles[0],
+                           radius[0], kMaxVelocity, kMaxAcceleration, coeff[0]);
+    cost_sum +=
+        GetTrajRealCost(xu_vecs[0], bubbles[0], radius[0], bubbles[0],
+                        radius[0], kMaxVelocity, kMaxAcceleration, coeff[0]);
+    F_mats[0] = GetTransition(xu_vecs[0]);
+    costs[num_steps - 1] = GetTrajTermCost(xu_vecs[num_steps - 1], goal);
+    cost_sum += GetTrajRealTermCost(xu_vecs[num_steps - 1], goal);
+    F_mats[num_steps - 1] = GetTransition(xu_vecs[num_steps - 1]);
+    for (int k = 1; k < num_steps - 1; ++k) {
+      costs[k] =
+          GetTrajCost(xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k],
+                      radius[k], kMaxVelocity, kMaxAcceleration, coeff[k]);
+      cost_sum +=
+          GetTrajRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k],
+                          radius[k], kMaxVelocity, kMaxAcceleration, coeff[k]);
+      if (iter < 5)
+        std::cout << "cost[" << k << "]: " << cost_sum << std::endl;
+      F_mats[k] = GetTransition(xu_vecs[k]);
+    }
+
+    for (int k = num_steps - 1; k >= 0; --k) {
+      Eigen::Matrix<float, 13, 13> Q;
+      Eigen::Matrix<float, 13, 1> q;
+      if (k == num_steps - 1) {
+        // Terminal cost.
+        const std::pair<Eigen::Matrix<float, 13, 13>,
+                        Eigen::Matrix<float, 13, 1>>
+            cost = costs[k];
+        Q = cost.first;
+        q = cost.second;
+      } else {
+        const std::pair<Eigen::Matrix<float, 13, 13>,
+                        Eigen::Matrix<float, 13, 1>>
+            cost = costs[k];
+        const Eigen::Matrix<float, 9, 13> F = F_mats[k];
+        Q = cost.first + F.transpose() * V * F;
+        q = cost.second + F.transpose() * v;
+      }
+      const Eigen::Matrix<float, 9, 9> Qxx = Q.block<9, 9>(0, 0);
+      const Eigen::Matrix<float, 9, 4> Qxu = Q.block<9, 4>(0, 9);
+      const Eigen::Matrix<float, 4, 9> Qux = Q.block<4, 9>(9, 0);
+      const Eigen::Matrix<float, 4, 4> Quu = Q.block<4, 4>(9, 9);
+      const Eigen::Matrix<float, 9, 1> qx = q.block<9, 1>(0, 0);
+      const Eigen::Matrix<float, 4, 1> qu = q.block<4, 1>(9, 0);
+      K_mats[k] = -Quu.inverse() * Qux;
+      k_vecs[k] = -Quu.inverse() * qu;
+
+      const Eigen::Matrix<float, 4, 9> K_mat = K_mats[k];
+      const Eigen::Matrix<float, 4, 1> k_vec = k_vecs[k];
+      V = Qxx + Qxu * K_mat + K_mat.transpose() * Qux +
+          K_mat.transpose() * Quu * K_mat;
+      v = qx + Qxu * k_vec + K_mat.transpose() * qu +
+          K_mat.transpose() * Quu * k_vec;
+      delta_V.first += k_vec.transpose() * qu;
+      delta_V.second += 0.5f * k_vec.transpose() * Quu * k_vec;
+    }
+    // track.OutputPassingTime("Backward Pass");
+
+    float alpha = 1.0f;
+    bool is_line_search_done = false;
+    int line_search_iter = 0;
+    // TODO: Parellel line search.
+    // Update: It is a pity that it is not worthwhile to parallelize the line
+    // search, too. The overhead of creating threads is too high.
+    // track.SetStartTime();
+    const std::vector<Eigen::Matrix<float, 13, 1>> cur_xu_vecs(xu_vecs);
+    while (!is_line_search_done && line_search_iter < kMaxLineSearchIter) {
+      ++line_search_iter;
+      // Forward Pass.
+      float next_cost_sum = 0.0f;
+      for (int k = 0; k < num_steps - 1; ++k) {
+        const Eigen::Matrix<float, 9, 1> x = cur_xu_vecs[k].block<9, 1>(0, 0);
+        const Eigen::Matrix<float, 4, 1> u = cur_xu_vecs[k].block<4, 1>(9, 0);
+        xu_vecs[k].block<4, 1>(9, 0) =
+            K_mats[k] * (x_hat_vecs[k] - x) + alpha * k_vecs[k] + u;
+        xu_vecs[k].block<9, 1>(0, 0) = x_hat_vecs[k];
+        x_hat_vecs[k + 1] = GetRealTransition(xu_vecs[k]);
+        // Calculate the new cost.
+        if (k == 0) {
+          next_cost_sum += GetTrajRealCost(xu_vecs[k], bubbles[k], radius[k],
+                                           bubbles[k], radius[k], kMaxVelocity,
+                                           kMaxAcceleration, coeff[k]);
+        } else {
+          next_cost_sum += GetTrajRealCost(
+              xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k], radius[k],
+              kMaxVelocity, kMaxAcceleration, coeff[k]);
+        }
+      }
+      xu_vecs[num_steps - 1].block<9, 1>(0, 0) = x_hat_vecs[num_steps - 1];
+      next_cost_sum += GetTrajRealTermCost(xu_vecs[num_steps - 1], goal);
+      // Check if J satisfy line search condition.
+      const float ratio_decrease =
+          (next_cost_sum - cost_sum) /
+          (alpha * (delta_V.first + alpha * delta_V.second));
+      if (line_search_iter < kMaxLineSearchIter &&
+          (ratio_decrease <= 1e-4 || ratio_decrease >= 10.0f)) {
+        alpha *= 0.5f;
+      } else {
+        is_line_search_done = true;
+      }
+    }
+    // track.OutputPassingTime("Forward Pass");
+
+    // Calculate the path length.
+    path_length = 0.0f;
+    time_sum = 0.0f;
+    for (int k = 0; k < num_steps - 1; ++k) {
+      const float dx = xu_vecs[k + 1](0) - xu_vecs[k](0);
+      const float dy = xu_vecs[k + 1](3) - xu_vecs[k](3);
+      const float dz = xu_vecs[k + 1](6) - xu_vecs[k](6);
+      path_length += std::hypot(dx, dy, dz);
+      time_sum += xu_vecs[k](12);
+    }
+
+    // Terminate condition.
+    if (iter > 0 &&
+        std::fabs(path_length - last_path_length) < kConvergenceThreshold) {
+      std::cout << "Convergence reached ! iter: " << iter
+                << " cost: " << cost_sum << " path_length: " << path_length
+                << " time_sum: " << time_sum << std::endl;
+      ilqr_traj.num_iter = iter;
+      ilqr_traj.traj_length = path_length;
+      ilqr_traj.total_time = time_sum;
+      break;
+    } else {
+      last_path_length = path_length;
+      last_cost_sum = cost_sum;
+      last_time_sum = time_sum;
+      std::cout << "iter: " << iter << " cost: " << cost_sum
+                << " path_length: " << path_length << " time_sum: " << time_sum
+                << std::endl;
+    }
+  }
+  // Output the trajectory.
+  ilqr_traj.traj = std::move(xu_vecs);
+  return ilqr_traj;
+}
+
+Eigen::Matrix<float, 9, 13>
+DynamicVoronoi3D::GetTransition(const Eigen::Matrix<float, 13, 1> &xu) {
+  Eigen::Matrix<float, 9, 13> F = Eigen::Matrix<float, 9, 13>::Zero();
+  const float px = xu(0);
+  const float vx = xu(1);
+  const float ax = xu(2);
+
+  const float py = xu(3);
+  const float vy = xu(4);
+  const float ay = xu(5);
+
+  const float pz = xu(6);
+  const float vz = xu(7);
+  const float az = xu(8);
+
+  const float jx = xu(9);
+  const float jy = xu(10);
+  const float jz = xu(11);
+  const float dt = xu(12);
+  const float dt_2 = dt * dt;
+  const float dt_3 = dt_2 * dt;
+
+  Eigen::Matrix<float, 3, 3> dFdx;
+  // clang-format off
+  dFdx << 
+  1.0f,   dt, dt_2 / 2.0f,
+  0.0f, 1.0f,          dt,
+  0.0f, 0.0f,         1.0f;
+  // clang-format on
+
+  Eigen::Matrix<float, 3, 1> dFdu;
+  // clang-format off
+  dFdu <<
+  dt_3 / 6.0f,
+  dt_2 / 2.0f,
+  dt;
+  // clang-format on
+
+  Eigen::Matrix<float, 9, 1> dFdt;
+  // clang-format off
+  dFdt <<
+  vx + ax * dt + jx * dt_2 / 2.0f,
+  ax + jx * dt,
+  jx,
+  vy + ay * dt + jy * dt_2 / 2.0f,
+  ay + jy * dt,
+  jy,
+  vz + az * dt + jz * dt_2 / 2.0f,
+  az + jz * dt,
+  jz;
+  // clang-format on
+
+  F.block<3, 3>(0, 0) = dFdx;
+  F.block<3, 3>(3, 3) = dFdx;
+  F.block<3, 3>(6, 6) = dFdx;
+  F.block<3, 1>(0, 9) = dFdu;
+  F.block<3, 1>(3, 10) = dFdu;
+  F.block<3, 1>(6, 11) = dFdu;
+  F.block<9, 1>(0, 12) = dFdt;
+  return F;
+}
+
+Eigen::Matrix<float, 9, 1>
+DynamicVoronoi3D::GetRealTransition(const Eigen::Matrix<float, 13, 1> &xu) {
+  const float px = xu(0);
+  const float vx = xu(1);
+  const float ax = xu(2);
+
+  const float py = xu(3);
+  const float vy = xu(4);
+  const float ay = xu(5);
+
+  const float pz = xu(6);
+  const float vz = xu(7);
+  const float az = xu(8);
+
+  const float jx = xu(9);
+  const float jy = xu(10);
+  const float jz = xu(11);
+  const float dt = xu(12);
+  const float dt_2 = dt * dt;
+  const float dt_3 = dt_2 * dt;
+
+  // std::cout << "px: " << px << " py: " << py << " pz: " << pz << std::endl;
+  // std::cout << "vx: " << vx << " vy: " << vy << " vz: " << vz << std::endl;
+  // std::cout << "ax: " << ax << " ay: " << ay << " az: " << az << std::endl;
+  // std::cout << "jx: " << jx << " jy: " << jy << " jz: " << jz << std::endl;
+  // std::cout << "sx: " << sx << " sy: " << sy << " sz: " << sz << std::endl;
+  // std::cout << "dt: " << dt << std::endl;
+
+  Eigen::Matrix<float, 9, 1> next_xu;
+  // clang-format off
+  next_xu <<
+  px + vx * dt + ax * dt_2 / 2.0f + jx * dt_3 / 6.0f,
+  vx + ax * dt + jx * dt_2 / 2.0f,
+  ax + jx * dt,
+  py + vy * dt + ay * dt_2 / 2.0f + jy * dt_3 / 6.0f,
+  vy + ay * dt + jy * dt_2 / 2.0f,
+  ay + jy * dt,
+  pz + vz * dt + az * dt_2 / 2.0f + jz * dt_3 / 6.0f,
+  vz + az * dt + jz * dt_2 / 2.0f,
+  az + jz * dt;
+  // clang-format on
+  return next_xu;
+}
+
+std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>
+DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu,
+                              const IntPoint3D &bubble_1, const float radius_1,
+                              const IntPoint3D &bubble_2, const float radius_2,
+                              const float max_vel, const float max_acc,
+                              const float coeff) {
+  const float px = xu(0);
+  const float vx = xu(1);
+  const float ax = xu(2);
+
+  const float py = xu(3);
+  const float vy = xu(4);
+  const float ay = xu(5);
+
+  const float pz = xu(6);
+  const float vz = xu(7);
+  const float az = xu(8);
+
+  const float jx = xu(9);
+  const float jy = xu(10);
+  const float jz = xu(11);
+  const float dt = xu(12);
+
+  float dc_px = 0.0;
+  float dc_py = 0.0;
+  float dc_pz = 0.0;
+  float ddc_px = 0.0;
+  float ddc_py = 0.0;
+  float ddc_pz = 0.0;
+
+  float dc_vx = 0.0;
+  float dc_vy = 0.0;
+  float dc_vz = 0.0;
+  float ddc_vx = 0.0;
+  float ddc_vy = 0.0;
+  float ddc_vz = 0.0;
+
+  float dc_ax = 0.0;
+  float dc_ay = 0.0;
+  float dc_az = 0.0;
+  float ddc_ax = 0.0;
+  float ddc_ay = 0.0;
+  float ddc_az = 0.0;
+
+  // Constraints of bubble 1.
+  const int dx_1 = px - bubble_1.x;
+  const int dy_1 = py - bubble_1.y;
+  const int dz_1 = pz - bubble_1.z;
+  if (dx_1 * dx_1 + dy_1 * dy_1 + dz_1 * dz_1 > radius_1 * radius_1) {
+    dc_px += kBndWeight * dx_1;
+    dc_py += kBndWeight * dy_1;
+    dc_pz += kBndWeight * dz_1;
+    ddc_px += kBndWeight;
+    ddc_py += kBndWeight;
+    ddc_pz += kBndWeight;
+  }
+  // Constraints of bubble 2.
+  const int dx_2 = px - bubble_2.x;
+  const int dy_2 = py - bubble_2.y;
+  const int dz_2 = pz - bubble_2.z;
+  if (dx_2 * dx_2 + dy_2 * dy_2 + dz_2 * dz_2 > radius_2 * radius_2) {
+    dc_px += kBndWeight * dx_2;
+    dc_py += kBndWeight * dy_2;
+    dc_pz += kBndWeight * dz_2;
+    ddc_px += kBndWeight;
+    ddc_py += kBndWeight;
+    ddc_pz += kBndWeight;
+  }
+  // Velocity constraints.
+  if (vx > max_vel) {
+    dc_vx += kBndWeight * (vx - max_vel);
+    ddc_vx += kBndWeight;
+  } else if (vx < -max_vel) {
+    dc_vx += kBndWeight * (vx + max_vel);
+    ddc_vx += kBndWeight;
+  }
+  if (vy > max_vel) {
+    dc_vy += kBndWeight * (vy - max_vel);
+    ddc_vy += kBndWeight;
+  } else if (vy < -max_vel) {
+    dc_vy += kBndWeight * (vy + max_vel);
+    ddc_vy += kBndWeight;
+  }
+  if (vz > max_vel) {
+    dc_vz += kBndWeight * (vz - max_vel);
+    ddc_vz += kBndWeight;
+  } else if (vz < -max_vel) {
+    dc_vz += kBndWeight * (vz + max_vel);
+    ddc_vz += kBndWeight;
+  }
+  // Acceleration constraints.
+  if (ax > max_acc) {
+    dc_ax += kBndWeight * (ax - max_acc);
+    ddc_ax += kBndWeight;
+  } else if (ax < -max_acc) {
+    dc_ax += kBndWeight * (ax + max_acc);
+    ddc_ax += kBndWeight;
+  }
+  if (ay > max_acc) {
+    dc_ay += kBndWeight * (ay - max_acc);
+    ddc_ay += kBndWeight;
+  } else if (ay < -max_acc) {
+    dc_ay += kBndWeight * (ay + max_acc);
+    ddc_ay += kBndWeight;
+  }
+  if (az > max_acc) {
+    dc_az += kBndWeight * (az - max_acc);
+    ddc_az += kBndWeight;
+  } else if (az < -max_acc) {
+    dc_az += kBndWeight * (az + max_acc);
+    ddc_az += kBndWeight;
+  }
+  // Time cost.
+  float dc_dt =
+      kTimeWeight * dt + kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz);
+  float ddc_dt = kTimeWeight;
+  // Time constraint.
+  if (dt < 0.0) {
+    dc_dt += kBndWeight * dt;
+    ddc_dt += kBndWeight;
+  }
+  // Smoothness cost.
+  const float dc_jx = kSmoothWeight * jx * dt;
+  const float dc_jy = kSmoothWeight * jy * dt;
+  const float dc_jz = kSmoothWeight * jz * dt;
+  // Results.
+  std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>> cost;
+  // clang-format off
+  cost.first <<
+  ddc_px, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, ddc_py, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, ddc_pz, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, ddc_vx, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, ddc_vy, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ddc_vz, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ddc_ax, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ddc_ay, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ddc_az, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, 0.0f, kSmoothWeight * jx,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, kSmoothWeight * jy,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, kSmoothWeight * jz,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * jx, kSmoothWeight * jy, kSmoothWeight * jz, kTimeWeight;
+  cost.second <<
+  dc_px, dc_vx, dc_ax,
+  dc_py, dc_vy, dc_ay,
+  dc_pz, dc_vz, dc_az,
+  dc_jx, dc_jy, dc_jz, dc_dt;
+  // clang-format on
+  return cost;
+}
+
+float DynamicVoronoi3D::GetTrajRealCost(
+    const Eigen::Matrix<float, 13, 1> &xu, const IntPoint3D &bubble_1,
+    const float radius_1, const IntPoint3D &bubble_2, const float radius_2,
+    const float max_vel, const float max_acc, const float coeff) {
+  const float px = xu(0);
+  const float vx = xu(1);
+  const float ax = xu(2);
+
+  const float py = xu(3);
+  const float vy = xu(4);
+  const float ay = xu(5);
+
+  const float pz = xu(6);
+  const float vz = xu(7);
+  const float az = xu(8);
+
+  const float jx = xu(9);
+  const float jy = xu(10);
+  const float jz = xu(11);
+  const float dt = xu(12);
+
+  float real_cost = 0.0f;
+  // Constraints of bubble 1.
+  const int dx_1 = px - bubble_1.x;
+  const int dy_1 = py - bubble_1.y;
+  const int dz_1 = pz - bubble_1.z;
+  if (dx_1 * dx_1 + dy_1 * dy_1 + dz_1 * dz_1 > radius_1 * radius_1) {
+    real_cost +=
+        kBndWeight * 0.5f *
+        (dx_1 * dx_1 + dy_1 * dy_1 + dz_1 * dz_1 - radius_1 * radius_1);
+  }
+  // Constraints of bubble 2.
+  const int dx_2 = px - bubble_2.x;
+  const int dy_2 = py - bubble_2.y;
+  const int dz_2 = pz - bubble_2.z;
+  if (dx_2 * dx_2 + dy_2 * dy_2 + dz_2 * dz_2 > radius_2 * radius_2) {
+    real_cost +=
+        kBndWeight * 0.5f *
+        (dx_2 * dx_2 + dy_2 * dy_2 + dz_2 * dz_2 - radius_2 * radius_2);
+  }
+  // Velocity constraints.
+  if (vx > max_vel) {
+    real_cost += kBndWeight * 0.5f * (vx - max_vel) * (vx - max_vel);
+  } else if (vx < -max_vel) {
+    real_cost += kBndWeight * 0.5f * (vx + max_vel) * (vx + max_vel);
+  }
+  if (vy > max_vel) {
+    real_cost += kBndWeight * 0.5f * (vy - max_vel) * (vy - max_vel);
+  } else if (vy < -max_vel) {
+    real_cost += kBndWeight * 0.5f * (vy + max_vel) * (vy + max_vel);
+  }
+  if (vz > max_vel) {
+    real_cost += kBndWeight * 0.5f * (vz - max_vel) * (vz - max_vel);
+  } else if (vz < -max_vel) {
+    real_cost += kBndWeight * 0.5f * (vz + max_vel) * (vz + max_vel);
+  }
+  // Acceleration constraints.
+  if (ax > max_acc) {
+    real_cost += kBndWeight * 0.5f * (ax - max_acc) * (ax - max_acc);
+  } else if (ax < -max_acc) {
+    real_cost += kBndWeight * 0.5f * (ax + max_acc) * (ax + max_acc);
+  }
+  if (ay > max_acc) {
+    real_cost += kBndWeight * 0.5f * (ay - max_acc) * (ay - max_acc);
+  } else if (ay < -max_acc) {
+    real_cost += kBndWeight * 0.5f * (ay + max_acc) * (ay + max_acc);
+  }
+  if (az > max_acc) {
+    real_cost += kBndWeight * 0.5f * (az - max_acc) * (az - max_acc);
+  } else if (az < -max_acc) {
+    real_cost += kBndWeight * 0.5f * (az + max_acc) * (az + max_acc);
+  }
+  // Time constraint.
+  if (dt < 0.0) {
+    real_cost += kBndWeight * 0.5f * dt * dt;
+  }
+  // Time cost and smoothness cost.
+  real_cost += kTimeWeight * 0.5f * dt * dt +
+               kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz) * dt;
+  return real_cost;
+}
+
+std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>
+DynamicVoronoi3D::GetTrajTermCost(const Eigen::Matrix<float, 13, 1> &xu,
+                                  const IntPoint3D &goal) {
+  const float px = xu(0);
+  const float vx = xu(1);
+  const float ax = xu(2);
+
+  const float py = xu(3);
+  const float vy = xu(4);
+  const float ay = xu(5);
+
+  const float pz = xu(6);
+  const float vz = xu(7);
+  const float az = xu(8);
+
+  const float jx = xu(9);
+  const float jy = xu(10);
+  const float jz = xu(11);
+  const float dt = xu(12);
+
+  std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>> cost;
+  // clang-format off
+  cost.first <<
+  kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, 0.0f, kSmoothWeight * jx,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, kSmoothWeight * jy,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, kSmoothWeight * jz,
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * jx, kSmoothWeight * jy, kSmoothWeight * jz, kTimeWeight;
+  cost.second <<
+  kTermWeight * (px - goal.x),
+  kTermWeight * vx,
+  kTermWeight * ax,
+  kTermWeight * (py - goal.y),
+  kTermWeight * vy,
+  kTermWeight * ay,
+  kTermWeight * (pz - goal.z),
+  kTermWeight * vz,
+  kTermWeight * az,
+  kSmoothWeight * jx * dt,
+  kSmoothWeight * jy * dt,
+  kSmoothWeight * jz * dt,
+  kTimeWeight * dt + kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz);
+  // clang-format on
+  return cost;
+}
+
+float DynamicVoronoi3D::GetTrajRealTermCost(
+    const Eigen::Matrix<float, 13, 1> &xu, const IntPoint3D &goal) {
+  const float px = xu(0);
+  const float vx = xu(1);
+  const float ax = xu(2);
+
+  const float py = xu(3);
+  const float vy = xu(4);
+  const float ay = xu(5);
+
+  const float pz = xu(6);
+  const float vz = xu(7);
+  const float az = xu(8);
+
+  const float jx = xu(9);
+  const float jy = xu(10);
+  const float jz = xu(11);
+  const float dt = xu(12);
+
+  float real_cost = 0.0;
+  const float dx = px - goal.x;
+  const float dy = py - goal.y;
+  const float dz = pz - goal.z;
+  real_cost += kTermWeight * 0.5f * dx * dx + kTermWeight * 0.5f * vx * vx +
+               kTermWeight * 0.5f * ax * ax + kTermWeight * 0.5f * dy * dy +
+               kTermWeight * 0.5f * vy * vy + kTermWeight * 0.5f * ay * ay +
+               kTermWeight * 0.5f * dz * dz + kTermWeight * 0.5f * vz * vz +
+               kTermWeight * 0.5f * az * az;
+  real_cost += kTimeWeight * 0.5f * dt * dt +
+               kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz) * dt;
   return real_cost;
 }
