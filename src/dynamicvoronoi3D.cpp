@@ -20,6 +20,8 @@ constexpr int kDeadEndThreshold = 10;
 constexpr int kObstacleWaveInibitDistance = 5;
 constexpr float kMaxVelocity = 15.0f;
 constexpr float kMaxAcceleration = 10.0f;
+constexpr float kRegularization = 0.01f;
+constexpr float kMinTimeStep = 0.1f;
 } // namespace
 
 const std::vector<IntPoint3D> nbr_offsets = {
@@ -1455,57 +1457,18 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
   const IntPoint3D start = path.front();
   const IntPoint3D goal = path.back();
 
-  // clang-format off
-  xu_vecs[0] << 
-  start.x, 0.0f, 0.0f,
-  start.y, 0.0f, 0.0f,
-  start.z, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 1.0f;
-  x_hat_vecs[0] << 
-  start.x, 0.0f, 0.0f,
-  start.y, 0.0f, 0.0f,
-  start.z, 0.0f, 0.0f;
-  // clang-format on
-
-  for (int i = 1; i < num_steps - 1; ++i) {
-    const float delta_c = GetDistanceBetween(bubbles[i - 1], bubbles[i]);
-    const float dist =
-        0.5f * (delta_c + (radius[i - 1] + radius[i]) *
-                              (radius[i - 1] - radius[i]) / delta_c);
-    const float x_initial =
-        bubbles[i - 1].x + dist / delta_c * (bubbles[i].x - bubbles[i - 1].x);
-    const float y_initial =
-        bubbles[i - 1].y + dist / delta_c * (bubbles[i].y - bubbles[i - 1].y);
-    const float z_initial =
-        bubbles[i - 1].z + dist / delta_c * (bubbles[i].z - bubbles[i - 1].z);
+  for (int i = 0; i < num_steps; ++i) {
     // clang-format off
-    xu_vecs[i] << 
-    x_initial, 0.0f, 0.0f,
-    y_initial, 0.0f, 0.0f,
-    z_initial, 0.0f, 0.0f,
-    0.0f, 0.0f, 0.0f, 1.0f;
+    x_hat_vecs[i] <<
+    ilqr_path[i].x, 0.0f, 0.0f,
+    ilqr_path[i].y, 0.0f, 0.0f,
+    ilqr_path[i].z, 0.0f, 0.0f;
     // clang-format on
+
+    // Initial Guess.
+    xu_vecs[i].block<9, 1>(0, 0) = x_hat_vecs[i];
+    xu_vecs[i].block<4, 1>(9, 0) << 0.0f, 0.0f, 0.0f, 1.0f;
   }
-  // clang-format off
-  xu_vecs[num_steps - 1] << 
-  goal.x, 0.0f, 0.0f,
-  goal.y, 0.0f, 0.0f,
-  goal.z, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 1.0f;
-  // clang-format on
-
-  // for (int i = 0; i < num_steps; ++i) {
-  //   // clang-format off
-  //   x_hat_vecs[i] <<
-  //   ilqr_path[i].x, 0.0f, 0.0f,
-  //   ilqr_path[i].y, 0.0f, 0.0f,
-  //   ilqr_path[i].z, 0.0f, 0.0f;
-  //   // clang-format on
-
-  //   // Initial Guess.
-  //   xu_vecs[i].block<9, 1>(0, 0) = x_hat_vecs[i];
-  //   xu_vecs[i].block<4, 1>(9, 0) << 0.0f, 0.0f, 0.0f, 1.0f;
-  // }
 
   // Calculate the coefficents.
   std::cout << "start ilqr optimization..." << std::endl;
@@ -1573,7 +1536,9 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
       const Eigen::Matrix<float, 9, 9> Qxx = Q.block<9, 9>(0, 0);
       const Eigen::Matrix<float, 9, 4> Qxu = Q.block<9, 4>(0, 9);
       const Eigen::Matrix<float, 4, 9> Qux = Q.block<4, 9>(9, 0);
-      const Eigen::Matrix<float, 4, 4> Quu = Q.block<4, 4>(9, 9);
+      const Eigen::Matrix<float, 4, 4> Quu =
+          Q.block<4, 4>(9, 9) +
+          kRegularization * Eigen::Matrix<float, 4, 4>::Identity();
       const Eigen::Matrix<float, 9, 1> qx = q.block<9, 1>(0, 0);
       const Eigen::Matrix<float, 4, 1> qu = q.block<4, 1>(9, 0);
       K_mats[k] = -Quu.inverse() * Qux;
@@ -1889,12 +1854,12 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu,
     ddc_az += kBndWeight;
   }
   // Time cost.
-  float dc_dt =
-      kTimeWeight * dt + kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz);
+  float dc_dt = kTimeWeight * (dt - kMinTimeStep) +
+                kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz);
   float ddc_dt = kTimeWeight;
   // Time constraint.
-  if (dt < 0.0) {
-    dc_dt += kBndWeight * dt;
+  if (dt < kMinTimeStep) {
+    dc_dt += kBndWeight * (dt - kMinTimeStep);
     ddc_dt += kBndWeight;
   }
   // Smoothness cost.
@@ -1917,7 +1882,7 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu,
   0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, 0.0f, kSmoothWeight * jx,
   0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, kSmoothWeight * jy,
   0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, kSmoothWeight * jz,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * jx, kSmoothWeight * jy, kSmoothWeight * jz, kTimeWeight;
+  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * jx, kSmoothWeight * jy, kSmoothWeight * jz, ddc_dt;
   cost.second <<
   dc_px, dc_vx, dc_ax,
   dc_py, dc_vy, dc_ay,
@@ -2000,11 +1965,11 @@ float DynamicVoronoi3D::GetTrajRealCost(
     real_cost += kBndWeight * 0.5f * (az + max_acc) * (az + max_acc);
   }
   // Time constraint.
-  if (dt < 0.0) {
-    real_cost += kBndWeight * 0.5f * dt * dt;
+  if (dt < kMinTimeStep) {
+    real_cost += kBndWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep);
   }
   // Time cost and smoothness cost.
-  real_cost += kTimeWeight * 0.5f * dt * dt +
+  real_cost += kTimeWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep) +
                kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz) * dt;
   return real_cost;
 }
