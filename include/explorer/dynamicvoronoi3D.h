@@ -10,6 +10,10 @@
 
 #include "bucketedqueue.h"
 
+#define STATE_DIM 9
+#define CONTROL_DIM 10
+#define ALL_DIM (STATE_DIM + CONTROL_DIM)
+
 struct IntPoint3DHash {
   size_t operator()(const IntPoint3D &point) const {
     // x max_range: [0, 4095], 12 bit
@@ -84,7 +88,7 @@ struct iLQROutput {
 };
 
 struct iLQRTrajectory {
-  std::vector<Eigen::Matrix<float, 13, 1>> traj;
+  std::vector<Eigen::Matrix<float, ALL_DIM, 1>> traj;
   int num_iter;
   float traj_length;
   float total_time;
@@ -194,24 +198,27 @@ public:
   // iLQR Trajectory related methods.
   iLQRTrajectory GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
                                    const std::vector<IntPoint3D> &ilqr_path);
-  Eigen::Matrix<float, 9, 13>
-  GetTransition(const Eigen::Matrix<float, 13, 1> &xu);
+  Eigen::Matrix<float, 9, ALL_DIM>
+  GetTransition(const Eigen::Matrix<float, ALL_DIM, 1> &xu);
   Eigen::Matrix<float, 9, 1>
-  GetRealTransition(const Eigen::Matrix<float, 13, 1> &xu);
-  std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>
-  GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu, const IntPoint3D &bubble_1,
-              const float radius_1, const IntPoint3D &bubble_2,
-              const float radius_2, const float max_vel, const float max_acc,
-              const float coeff);
-  float GetTrajRealCost(const Eigen::Matrix<float, 13, 1> &xu,
+  GetRealTransition(const Eigen::Matrix<float, ALL_DIM, 1> &xu);
+  std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+            Eigen::Matrix<float, ALL_DIM, 1>>
+  GetTrajCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
+              const IntPoint3D &bubble_1, const float radius_1,
+              const IntPoint3D &bubble_2, const float radius_2,
+              const float max_vel, const float max_acc, const float coeff);
+  float GetTrajRealCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
                         const IntPoint3D &bubble_1, const float radius_1,
                         const IntPoint3D &bubble_2, const float radius_2,
                         const float max_vel, const float max_acc,
                         const float coeff);
-  std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>
-  GetTrajTermCost(const Eigen::Matrix<float, 13, 1> &xu,
+  float GetSmoothCost(const Eigen::Vector3f &coeff, const float dt);
+  std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+            Eigen::Matrix<float, ALL_DIM, 1>>
+  GetTrajTermCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
                   const IntPoint3D &goal);
-  float GetTrajRealTermCost(const Eigen::Matrix<float, 13, 1> &xu,
+  float GetTrajRealTermCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
                             const IntPoint3D &goal);
 
   // Graph related methods.

@@ -11,16 +11,17 @@ namespace {
 constexpr int kMaxIteration = 500;
 constexpr float kConvergenceThreshold = 0.05f;
 constexpr float kTermWeight = 1000.0f;
+constexpr float kTimeBndWeight = 100000.0f;
 constexpr float kBndWeight = 10000.0f;
 constexpr float kWeight = 100.0f;
-constexpr float kSmoothWeight = 0.0f;
-constexpr float kTimeWeight = 1.0f;
+constexpr float kSmoothWeight = 100.0f;
+constexpr float kTimeWeight = 100.0f;
 constexpr int kMaxLineSearchIter = 10;
 constexpr int kDeadEndThreshold = 10;
 constexpr int kObstacleWaveInibitDistance = 5;
 constexpr float kMaxVelocity = 15.0f;
 constexpr float kMaxAcceleration = 10.0f;
-constexpr float kRegularization = 0.01f;
+constexpr float kRegularization = 1.0f;
 constexpr float kMinTimeStep = 0.1f;
 } // namespace
 
@@ -1425,7 +1426,7 @@ iLQRTrajectory
 DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
                                     const std::vector<IntPoint3D> &ilqr_path) {
   iLQRTrajectory ilqr_traj;
-  std::vector<Eigen::Matrix<float, 13, 1>> traj;
+  std::vector<Eigen::Matrix<float, ALL_DIM, 1>> traj;
   TimeTrack track;
   if (path.empty() || path.size() < 2) {
     return ilqr_traj;
@@ -1440,16 +1441,16 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
   }
   // iLQR Path Optimization.
   const int num_steps = path.size() - 1;
-  std::vector<Eigen::Matrix<float, 9, 13>> F_mats(
-      num_steps, Eigen::Matrix<float, 9, 13>::Zero());
-  std::vector<Eigen::Matrix<float, 4, 9>> K_mats(
-      num_steps, Eigen::Matrix<float, 4, 9>::Zero());
-  std::vector<Eigen::Matrix<float, 4, 1>> k_vecs(
-      num_steps, Eigen::Matrix<float, 4, 1>::Zero());
-  std::vector<Eigen::Matrix<float, 13, 1>> xu_vecs(
-      num_steps, Eigen::Matrix<float, 13, 1>::Zero());
-  std::vector<Eigen::Matrix<float, 9, 1>> x_hat_vecs(
-      num_steps, Eigen::Matrix<float, 9, 1>::Zero());
+  std::vector<Eigen::Matrix<float, STATE_DIM, ALL_DIM>> F_mats(
+      num_steps, Eigen::Matrix<float, STATE_DIM, ALL_DIM>::Zero());
+  std::vector<Eigen::Matrix<float, CONTROL_DIM, STATE_DIM>> K_mats(
+      num_steps, Eigen::Matrix<float, CONTROL_DIM, STATE_DIM>::Zero());
+  std::vector<Eigen::Matrix<float, CONTROL_DIM, 1>> k_vecs(
+      num_steps, Eigen::Matrix<float, CONTROL_DIM, 1>::Zero());
+  std::vector<Eigen::Matrix<float, ALL_DIM, 1>> xu_vecs(
+      num_steps, Eigen::Matrix<float, ALL_DIM, 1>::Zero());
+  std::vector<Eigen::Matrix<float, STATE_DIM, 1>> x_hat_vecs(
+      num_steps, Eigen::Matrix<float, STATE_DIM, 1>::Zero());
   std::vector<float> coeff(num_steps, 0.0f);
   track.OutputPassingTime("Initialize");
   // Construct the initial guess.
@@ -1466,8 +1467,13 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
     // clang-format on
 
     // Initial Guess.
-    xu_vecs[i].block<9, 1>(0, 0) = x_hat_vecs[i];
-    xu_vecs[i].block<4, 1>(9, 0) << 0.0f, 0.0f, 0.0f, 1.0f;
+    xu_vecs[i].block<STATE_DIM, 1>(0, 0) = x_hat_vecs[i];
+    // clang-format off
+    xu_vecs[i].block<CONTROL_DIM, 1>(STATE_DIM, 0) << 
+    0.0f, 0.0f, 0.0f, 
+    0.0f, 0.0f, 0.0f, 
+    0.0f, 0.0f, 0.0f, 10.0f;
+    // clang-format on
   }
 
   // Calculate the coefficents.
@@ -1481,16 +1487,17 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
   float last_time_sum = time_sum;
   // Iteration Loop.
   for (int iter = 0; iter < kMaxIteration; ++iter) {
-    Eigen::Matrix<float, 9, 9> V;
-    Eigen::Matrix<float, 9, 1> v;
+    Eigen::Matrix<float, STATE_DIM, STATE_DIM> V;
+    Eigen::Matrix<float, STATE_DIM, 1> v;
     cost_sum = 0.0f;
     std::pair<float, float> delta_V(0.0f, 0.0f);
     // Backward Pass.
     // track.SetStartTime();
-    std::vector<
-        std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>>
-        costs(num_steps, std::make_pair(Eigen::Matrix<float, 13, 13>::Zero(),
-                                        Eigen::Matrix<float, 13, 1>::Zero()));
+    std::vector<std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+                          Eigen::Matrix<float, ALL_DIM, 1>>>
+        costs(num_steps,
+              std::make_pair(Eigen::Matrix<float, ALL_DIM, ALL_DIM>::Zero(),
+                             Eigen::Matrix<float, ALL_DIM, 1>::Zero()));
     // Cost can be calculated in parallel.
     // Update: Actually, in this case, it is not worthwhile to parallelize the
     // cost. Time is mainly spent in the calculation of V and v.
@@ -1510,42 +1517,45 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
       cost_sum +=
           GetTrajRealCost(xu_vecs[k], bubbles[k - 1], radius[k - 1], bubbles[k],
                           radius[k], kMaxVelocity, kMaxAcceleration, coeff[k]);
-      if (iter < 5)
-        std::cout << "cost[" << k << "]: " << cost_sum << std::endl;
       F_mats[k] = GetTransition(xu_vecs[k]);
     }
 
     for (int k = num_steps - 1; k >= 0; --k) {
-      Eigen::Matrix<float, 13, 13> Q;
-      Eigen::Matrix<float, 13, 1> q;
+      Eigen::Matrix<float, ALL_DIM, ALL_DIM> Q;
+      Eigen::Matrix<float, ALL_DIM, 1> q;
       if (k == num_steps - 1) {
         // Terminal cost.
-        const std::pair<Eigen::Matrix<float, 13, 13>,
-                        Eigen::Matrix<float, 13, 1>>
+        const std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+                        Eigen::Matrix<float, ALL_DIM, 1>>
             cost = costs[k];
         Q = cost.first;
         q = cost.second;
       } else {
-        const std::pair<Eigen::Matrix<float, 13, 13>,
-                        Eigen::Matrix<float, 13, 1>>
+        const std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+                        Eigen::Matrix<float, ALL_DIM, 1>>
             cost = costs[k];
-        const Eigen::Matrix<float, 9, 13> F = F_mats[k];
+        const Eigen::Matrix<float, STATE_DIM, ALL_DIM> F = F_mats[k];
         Q = cost.first + F.transpose() * V * F;
         q = cost.second + F.transpose() * v;
       }
-      const Eigen::Matrix<float, 9, 9> Qxx = Q.block<9, 9>(0, 0);
-      const Eigen::Matrix<float, 9, 4> Qxu = Q.block<9, 4>(0, 9);
-      const Eigen::Matrix<float, 4, 9> Qux = Q.block<4, 9>(9, 0);
-      const Eigen::Matrix<float, 4, 4> Quu =
-          Q.block<4, 4>(9, 9) +
-          kRegularization * Eigen::Matrix<float, 4, 4>::Identity();
-      const Eigen::Matrix<float, 9, 1> qx = q.block<9, 1>(0, 0);
-      const Eigen::Matrix<float, 4, 1> qu = q.block<4, 1>(9, 0);
+      const Eigen::Matrix<float, STATE_DIM, STATE_DIM> Qxx =
+          Q.block<STATE_DIM, STATE_DIM>(0, 0);
+      const Eigen::Matrix<float, STATE_DIM, CONTROL_DIM> Qxu =
+          Q.block<STATE_DIM, CONTROL_DIM>(0, STATE_DIM);
+      const Eigen::Matrix<float, CONTROL_DIM, STATE_DIM> Qux =
+          Q.block<CONTROL_DIM, STATE_DIM>(STATE_DIM, 0);
+      const Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM> Quu =
+          Q.block<CONTROL_DIM, CONTROL_DIM>(STATE_DIM, STATE_DIM) +
+          kRegularization *
+              Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM>::Identity();
+      const Eigen::Matrix<float, STATE_DIM, 1> qx = q.block<STATE_DIM, 1>(0, 0);
+      const Eigen::Matrix<float, CONTROL_DIM, 1> qu =
+          q.block<CONTROL_DIM, 1>(STATE_DIM, 0);
       K_mats[k] = -Quu.inverse() * Qux;
       k_vecs[k] = -Quu.inverse() * qu;
 
-      const Eigen::Matrix<float, 4, 9> K_mat = K_mats[k];
-      const Eigen::Matrix<float, 4, 1> k_vec = k_vecs[k];
+      const Eigen::Matrix<float, CONTROL_DIM, STATE_DIM> K_mat = K_mats[k];
+      const Eigen::Matrix<float, CONTROL_DIM, 1> k_vec = k_vecs[k];
       V = Qxx + Qxu * K_mat + K_mat.transpose() * Qux +
           K_mat.transpose() * Quu * K_mat;
       v = qx + Qxu * k_vec + K_mat.transpose() * qu +
@@ -1562,17 +1572,19 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
     // Update: It is a pity that it is not worthwhile to parallelize the line
     // search, too. The overhead of creating threads is too high.
     // track.SetStartTime();
-    const std::vector<Eigen::Matrix<float, 13, 1>> cur_xu_vecs(xu_vecs);
+    const std::vector<Eigen::Matrix<float, ALL_DIM, 1>> cur_xu_vecs(xu_vecs);
     while (!is_line_search_done && line_search_iter < kMaxLineSearchIter) {
       ++line_search_iter;
       // Forward Pass.
       float next_cost_sum = 0.0f;
       for (int k = 0; k < num_steps - 1; ++k) {
-        const Eigen::Matrix<float, 9, 1> x = cur_xu_vecs[k].block<9, 1>(0, 0);
-        const Eigen::Matrix<float, 4, 1> u = cur_xu_vecs[k].block<4, 1>(9, 0);
-        xu_vecs[k].block<4, 1>(9, 0) =
+        const Eigen::Matrix<float, STATE_DIM, 1> x =
+            cur_xu_vecs[k].block<STATE_DIM, 1>(0, 0);
+        const Eigen::Matrix<float, CONTROL_DIM, 1> u =
+            cur_xu_vecs[k].block<CONTROL_DIM, 1>(STATE_DIM, 0);
+        xu_vecs[k].block<CONTROL_DIM, 1>(STATE_DIM, 0) =
             K_mats[k] * (x_hat_vecs[k] - x) + alpha * k_vecs[k] + u;
-        xu_vecs[k].block<9, 1>(0, 0) = x_hat_vecs[k];
+        xu_vecs[k].block<STATE_DIM, 1>(0, 0) = x_hat_vecs[k];
         x_hat_vecs[k + 1] = GetRealTransition(xu_vecs[k]);
         // Calculate the new cost.
         if (k == 0) {
@@ -1585,7 +1597,8 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
               kMaxVelocity, kMaxAcceleration, coeff[k]);
         }
       }
-      xu_vecs[num_steps - 1].block<9, 1>(0, 0) = x_hat_vecs[num_steps - 1];
+      xu_vecs[num_steps - 1].block<STATE_DIM, 1>(0, 0) =
+          x_hat_vecs[num_steps - 1];
       next_cost_sum += GetTrajRealTermCost(xu_vecs[num_steps - 1], goal);
       // Check if J satisfy line search condition.
       const float ratio_decrease =
@@ -1608,7 +1621,7 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
       const float dy = xu_vecs[k + 1](3) - xu_vecs[k](3);
       const float dz = xu_vecs[k + 1](6) - xu_vecs[k](6);
       path_length += std::hypot(dx, dy, dz);
-      time_sum += xu_vecs[k](12);
+      time_sum += xu_vecs[k](18);
     }
 
     // Terminate condition.
@@ -1635,70 +1648,20 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
   return ilqr_traj;
 }
 
-Eigen::Matrix<float, 9, 13>
-DynamicVoronoi3D::GetTransition(const Eigen::Matrix<float, 13, 1> &xu) {
-  Eigen::Matrix<float, 9, 13> F = Eigen::Matrix<float, 9, 13>::Zero();
-  const float px = xu(0);
-  const float vx = xu(1);
-  const float ax = xu(2);
+Eigen::Matrix<float, STATE_DIM, ALL_DIM>
+DynamicVoronoi3D::GetTransition(const Eigen::Matrix<float, ALL_DIM, 1> &xu) {
+  Eigen::Matrix<float, STATE_DIM, ALL_DIM> F =
+      Eigen::Matrix<float, STATE_DIM, ALL_DIM>::Zero();
 
-  const float py = xu(3);
-  const float vy = xu(4);
-  const float ay = xu(5);
-
-  const float pz = xu(6);
-  const float vz = xu(7);
-  const float az = xu(8);
-
-  const float jx = xu(9);
-  const float jy = xu(10);
-  const float jz = xu(11);
-  const float dt = xu(12);
-  const float dt_2 = dt * dt;
-  const float dt_3 = dt_2 * dt;
-
-  Eigen::Matrix<float, 3, 3> dFdx;
-  // clang-format off
-  dFdx << 
-  1.0f,   dt, dt_2 / 2.0f,
-  0.0f, 1.0f,          dt,
-  0.0f, 0.0f,         1.0f;
-  // clang-format on
-
-  Eigen::Matrix<float, 3, 1> dFdu;
-  // clang-format off
-  dFdu <<
-  dt_3 / 6.0f,
-  dt_2 / 2.0f,
-  dt;
-  // clang-format on
-
-  Eigen::Matrix<float, 9, 1> dFdt;
-  // clang-format off
-  dFdt <<
-  vx + ax * dt + jx * dt_2 / 2.0f,
-  ax + jx * dt,
-  jx,
-  vy + ay * dt + jy * dt_2 / 2.0f,
-  ay + jy * dt,
-  jy,
-  vz + az * dt + jz * dt_2 / 2.0f,
-  az + jz * dt,
-  jz;
-  // clang-format on
-
-  F.block<3, 3>(0, 0) = dFdx;
-  F.block<3, 3>(3, 3) = dFdx;
-  F.block<3, 3>(6, 6) = dFdx;
-  F.block<3, 1>(0, 9) = dFdu;
-  F.block<3, 1>(3, 10) = dFdu;
-  F.block<3, 1>(6, 11) = dFdu;
-  F.block<9, 1>(0, 12) = dFdt;
+  F.block<STATE_DIM, STATE_DIM>(0, 0) =
+      Eigen::Matrix<float, STATE_DIM, STATE_DIM>::Identity();
+  F.block<STATE_DIM, STATE_DIM>(0, CONTROL_DIM) =
+      Eigen::Matrix<float, STATE_DIM, STATE_DIM>::Identity();
   return F;
 }
 
-Eigen::Matrix<float, 9, 1>
-DynamicVoronoi3D::GetRealTransition(const Eigen::Matrix<float, 13, 1> &xu) {
+Eigen::Matrix<float, STATE_DIM, 1> DynamicVoronoi3D::GetRealTransition(
+    const Eigen::Matrix<float, ALL_DIM, 1> &xu) {
   const float px = xu(0);
   const float vx = xu(1);
   const float ax = xu(2);
@@ -1711,12 +1674,19 @@ DynamicVoronoi3D::GetRealTransition(const Eigen::Matrix<float, 13, 1> &xu) {
   const float vz = xu(7);
   const float az = xu(8);
 
-  const float jx = xu(9);
-  const float jy = xu(10);
-  const float jz = xu(11);
-  const float dt = xu(12);
-  const float dt_2 = dt * dt;
-  const float dt_3 = dt_2 * dt;
+  const float dpx = xu(9);
+  const float dvx = xu(10);
+  const float dax = xu(11);
+
+  const float dpy = xu(12);
+  const float dvy = xu(13);
+  const float day = xu(14);
+
+  const float dpz = xu(15);
+  const float dvz = xu(16);
+  const float daz = xu(17);
+
+  const float dt = xu(18);
 
   // std::cout << "px: " << px << " py: " << py << " pz: " << pz << std::endl;
   // std::cout << "vx: " << vx << " vy: " << vy << " vz: " << vz << std::endl;
@@ -1725,24 +1695,25 @@ DynamicVoronoi3D::GetRealTransition(const Eigen::Matrix<float, 13, 1> &xu) {
   // std::cout << "sx: " << sx << " sy: " << sy << " sz: " << sz << std::endl;
   // std::cout << "dt: " << dt << std::endl;
 
-  Eigen::Matrix<float, 9, 1> next_xu;
+  Eigen::Matrix<float, STATE_DIM, 1> next_xu;
   // clang-format off
   next_xu <<
-  px + vx * dt + ax * dt_2 / 2.0f + jx * dt_3 / 6.0f,
-  vx + ax * dt + jx * dt_2 / 2.0f,
-  ax + jx * dt,
-  py + vy * dt + ay * dt_2 / 2.0f + jy * dt_3 / 6.0f,
-  vy + ay * dt + jy * dt_2 / 2.0f,
-  ay + jy * dt,
-  pz + vz * dt + az * dt_2 / 2.0f + jz * dt_3 / 6.0f,
-  vz + az * dt + jz * dt_2 / 2.0f,
-  az + jz * dt;
+  px + dpx,
+  vx + dvx,
+  ax + dax,
+  py + dpy,
+  vy + dvy,
+  ay + day,
+  pz + dpz,
+  vz + dvz,
+  az + daz;
   // clang-format on
   return next_xu;
 }
 
-std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>
-DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu,
+std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+          Eigen::Matrix<float, ALL_DIM, 1>>
+DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
                               const IntPoint3D &bubble_1, const float radius_1,
                               const IntPoint3D &bubble_2, const float radius_2,
                               const float max_vel, const float max_acc,
@@ -1759,10 +1730,25 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu,
   const float vz = xu(7);
   const float az = xu(8);
 
-  const float jx = xu(9);
-  const float jy = xu(10);
-  const float jz = xu(11);
-  const float dt = xu(12);
+  const float dpx = xu(9);
+  const float dvx = xu(10);
+  const float dax = xu(11);
+
+  const float dpy = xu(12);
+  const float dvy = xu(13);
+  const float day = xu(14);
+
+  const float dpz = xu(15);
+  const float dvz = xu(16);
+  const float daz = xu(17);
+
+  const float dt = xu(18);
+  const float dt_2 = dt * dt;
+  const float dt_3 = dt_2 * dt;
+  const float dt_4 = dt_3 * dt;
+  const float dt_5 = dt_4 * dt;
+  const float dt_6 = dt_5 * dt;
+  const float dt_7 = dt_6 * dt;
 
   float dc_px = 0.0;
   float dc_py = 0.0;
@@ -1785,6 +1771,10 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu,
   float ddc_ay = 0.0;
   float ddc_az = 0.0;
 
+  // State constraints.
+  std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+            Eigen::Matrix<float, ALL_DIM, 1>>
+      state_cost;
   // Constraints of bubble 1.
   const int dx_1 = px - bubble_1.x;
   const int dy_1 = py - bubble_1.y;
@@ -1853,47 +1843,177 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, 13, 1> &xu,
     dc_az += kBndWeight * (az + max_acc);
     ddc_az += kBndWeight;
   }
+  // clang-format off
+  state_cost.first = Eigen::Matrix<float, ALL_DIM, ALL_DIM>::Zero();
+  state_cost.first.diagonal() <<
+  ddc_px, ddc_vx, ddc_ax,
+  ddc_py, ddc_vy, ddc_ay,
+  ddc_pz, ddc_vz, ddc_az,
+  0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f,
+  0.0f;
+  state_cost.second <<
+  dc_px, dc_vx, dc_ax,
+  dc_py, dc_vy, dc_ay,
+  dc_pz, dc_vz, dc_az,
+  0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f,
+  0.0f;
+  // clang-format on
+
   // Time cost.
-  float dc_dt = kTimeWeight * (dt - kMinTimeStep) +
-                kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz);
+  std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+            Eigen::Matrix<float, ALL_DIM, 1>>
+      time_cost;
+  // Time cost.
+  float dc_dt = kTimeWeight * (dt - kMinTimeStep);
   float ddc_dt = kTimeWeight;
   // Time constraint.
   if (dt < kMinTimeStep) {
     dc_dt += kBndWeight * (dt - kMinTimeStep);
     ddc_dt += kBndWeight;
   }
+  time_cost.first = Eigen::Matrix<float, ALL_DIM, ALL_DIM>::Zero();
+  time_cost.first(ALL_DIM - 1, ALL_DIM - 1) = ddc_dt;
+  time_cost.second = Eigen::Matrix<float, ALL_DIM, 1>::Zero();
+  time_cost.second(ALL_DIM - 1) = dc_dt;
+
   // Smoothness cost.
-  const float dc_jx = kSmoothWeight * jx * dt;
-  const float dc_jy = kSmoothWeight * jy * dt;
-  const float dc_jz = kSmoothWeight * jz * dt;
-  // Results.
-  std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>> cost;
+  std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+            Eigen::Matrix<float, ALL_DIM, 1>>
+      smooth_cost;
+  Eigen::Vector3f a, da, v, dv, dp;
+  a << ax, ay, az;
+  da << dax, day, daz;
+  v << vx, vy, vz;
+  dv << dvx, dvy, dvz;
+  dp << dpx, dpy, dpz;
   // clang-format off
-  cost.first <<
-  ddc_px, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, ddc_py, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, ddc_pz, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, ddc_vx, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, ddc_vy, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ddc_vz, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ddc_ax, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ddc_ay, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, ddc_az, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, 0.0f, kSmoothWeight * jx,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, kSmoothWeight * jy,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, kSmoothWeight * jz,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * jx, kSmoothWeight * jy, kSmoothWeight * jz, ddc_dt;
-  cost.second <<
-  dc_px, dc_vx, dc_ax,
-  dc_py, dc_vy, dc_ay,
-  dc_pz, dc_vz, dc_az,
-  dc_jx, dc_jy, dc_jz, dc_dt;
+  const float ddst_px = 0.0f;
+  const float ddst_vx = (120.0f * (24.0f * dpx - 9.0f * dvx * dt - 18.0f * vx * dt + dax * dt_2)) / dt_5;
+  const float ddst_ax = -(6.0f * (2.0f * ax * dt - 4.0f * dvx + dax * dt)) / dt_3;
+  const float ddst_py = 0.0f;
+  const float ddst_vy = (120.0f * (24.0f * dpy - 9.0f * dvy * dt - 18.0f * vy * dt + day * dt_2)) / dt_5;
+  const float ddst_ay = -(6.0f * (2.0f * ay * dt - 4.0f * dvy + day * dt)) / dt_3;
+  const float ddst_pz = 0.0f;
+  const float ddst_vz = (120.0f * (24.0f * dpz - 9.0f * dvz * dt - 18.0f * vz * dt + daz * dt_2)) / dt_5; 
+  const float ddst_az = -(6.0f * (2.0f * az * dt - 4.0f * dvz + daz * dt)) / dt_3;
+
+  const float ddst_dpx = -(180.f * (20.0f * dpx - 8.0f * dvx * dt - 16.0f * vx * dt + dax * dt_2)) / dt_6;
+  const float ddst_dvx = (24.0f * (60.0f * dpx - 24.0f * dvx * dt - 45.0f * vx * dt + ax * dt_2 + 3.0f * dax * dt_2)) / dt_5;
+  const float ddst_dax = -(3.0f * (60.0f * dpx - 24.0f * dvx * dt - 40.0f * vx * dt + 2.0f * ax * dt_2 + 3.0f * dax * dt_2)) / dt_4;
+  const float ddst_dpy = -(180.f * (20.0f * dpy - 8.0f * dvy * dt - 16.0f * vy * dt + day * dt_2)) / dt_6;
+  const float ddst_dvy = (24.0f * (60.0f * dpy - 24.0f * dvy * dt - 45.0f * vy * dt + ay * dt_2 + 3.0f * day * dt_2)) / dt_5;
+  const float ddst_day = -(3.0f * (60.0f * dpy - 24.0f * dvy * dt - 40.0f * vy * dt + 2.0f * ay * dt_2 + 3.0f * day * dt_2)) / dt_4;
+  const float ddst_dpz = -(180.f * (20.0f * dpz - 8.0f * dvz * dt - 16.0f * vz * dt + daz * dt_2)) / dt_6;
+  const float ddst_dvz = (24.0f * (60.0f * dpz - 24.0f * dvz * dt - 45.0f * vz * dt + az * dt_2 + 3.0f * daz * dt_2)) / dt_5;
+  const float ddst_daz = -(3.0f * (60.0f * dpz - 24.0f * dvz * dt - 40.0f * vz * dt + 2.0f * az * dt_2 + 3.0f * daz * dt_2)) / dt_4;
+  const float ddst_t = (3.0f / dt_7) * 
+  (a.transpose() * (4.0f * dt_4)  * a +
+  a.transpose() * (4.0f * dt_4) * da +
+  a.transpose() * (-24.0f * dt_3) * dv +
+  da.transpose() * (3.0f * dt_4) * da +
+  da.transpose() * (240.0f * dt_2) * dp +
+  da.transpose() * ((-72.0f * dt_3) * dv + (-120.0f * dt_3) * v) +
+  dp.transpose() * (3600.0f) * dp +
+  dp.transpose() * ((-2400.0f * dt) * dv + (-4800.0f * dt) * v) +
+  dv.transpose() * (384.0f * dt_2) * dv +
+  dv.transpose() * (1440.0f * dt_2) * v +
+  v.transpose() * (1440.0f * dt_2) * v).value();
+  Eigen::Matrix3f dds_xx;
+  dds_xx << 
+  0.0f,          0.0f,       0.0f, 
+  0.0f, 720.0f / dt_3,       0.0f, 
+  0.0f,          0.0f, 12.0f / dt;
+  Eigen::Matrix3f dds_uu;
+  dds_uu << 
+  720.0f / dt_5, -360.0f / dt_4,  60.0f / dt_3,
+  -360.0f / dt_4, 192.0f / dt_3, -36.0f / dt_2,
+  60.0f /dt_3,     -36.0f /dt_2,   9.0f / dt_2;
+  Eigen::Matrix3f dds_xu;
+  dds_xu << 
+  0.0f,                    0.0f,          0.0f, 
+  -720.0f / dt_4, 360.0f / dt_3, -60.0f / dt_2,
+  0.0f,           -12.0f / dt_2,     6.0f / dt;
+  smooth_cost.first = Eigen::Matrix<float, ALL_DIM, ALL_DIM>::Zero();
+  smooth_cost.first.block<3, 3>(0, 0) = dds_xx;
+  smooth_cost.first.block<3, 3>(3, 3) = dds_xx;
+  smooth_cost.first.block<3, 3>(6, 6) = dds_xx;
+
+  smooth_cost.first.block<3, 3>(9, 9) = dds_uu;
+  smooth_cost.first.block<3, 3>(12, 12) = dds_uu;
+  smooth_cost.first.block<3, 3>(15, 15) = dds_uu;
+
+  smooth_cost.first(ALL_DIM - 1, ALL_DIM - 1) = ddst_t;
+
+  smooth_cost.first.block<3, 3>(0, 9) = dds_xu;
+  smooth_cost.first.block<3, 3>(3, 12) = dds_xu;
+  smooth_cost.first.block<3, 3>(6, 15) = dds_xu;
+
+  smooth_cost.first.block<CONTROL_DIM - 1, STATE_DIM>(STATE_DIM, 0) = 
+    smooth_cost.first.block<STATE_DIM, CONTROL_DIM - 1>(0, STATE_DIM).transpose();
+
+  smooth_cost.first.block<ALL_DIM - 1, 1>(0, ALL_DIM - 1) <<
+  ddst_px, ddst_vx, ddst_ax,
+  ddst_py, ddst_vy, ddst_ay,
+  ddst_pz, ddst_vz, ddst_az,
+  ddst_dpx, ddst_dvx, ddst_dax,
+  ddst_dpy, ddst_dvy, ddst_day,
+  ddst_dpz, ddst_dvz, ddst_daz;
+
+  smooth_cost.first.block<1, ALL_DIM - 1>(ALL_DIM - 1, 0) = 
+    smooth_cost.first.block<ALL_DIM - 1, 1>(0, ALL_DIM - 1).transpose();
+
+  smooth_cost.second <<
+  // Partial derivative of State.
+  0.0f,
+  -(60.0f * (12.0f * dpx - 6.0f * dvx * dt - 12.0f * vx * dt + dax * dt_2)) / dt_4,
+  (6.0f * (2.0f * ax * dt - 2.0f * dvx + dax * dt)) / dt_2, 
+  0.0f,
+  -(60.0f * (12.0f * dpy - 6.0f * dvy * dt - 12.0f * vy * dt + day * dt_2)) / dt_4,
+  (6.0f * (2.0f * ay * dt - 2.0f * dvy + day * dt)) / dt_2, 
+  0.0f,
+  -(60.0f * (12.0f * dpz - 6.0f * dvz * dt - 12.0f * vz * dt + daz * dt_2)) / dt_4,
+  (6.0f * (2.0f * az * dt - 2.0f * dvz + daz * dt)) / dt_2,
+  // Partial derivative delta state.
+  (60.0f * (12.0f * dpx - 6.0f * dvx * dt - 12.0f * vx * dt + dax * dt_2)) / dt_5,
+  -(12.0f * (30.0f * dpx - 16.0f * dvx * dt - 30.0f * vx * dt + ax * dt_2 + 3.0f * dax * dt_2)) / dt_4,
+  (3.0f * (20.0f * dpx - 12.0f * dvx * dt - 20.0f * vx * dt + 2.0f * ax * dt_2 + 3.0f * dax * dt_2)) / dt_3,
+  (60.0f * (12.0f * dpy - 6.0f * dvy * dt - 12.0f * vy * dt + day * dt_2)) / dt_5,
+  -(12.0f * (30.0f * dpy - 16.0f * dvy * dt - 30.0f * vy * dt + ay * dt_2 + 3.0f * day * dt_2)) / dt_4,
+  (3.0f * (20.0f * dpy - 12.0f * dvy * dt - 20.0f * vy * dt + 2.0f * ay * dt_2 + 3.0f * day * dt_2)) / dt_3,
+  (60.0f * (12.0f * dpz - 6.0f * dvz * dt - 12.0f * vz * dt + daz * dt_2)) / dt_5,
+  -(12.0f * (30.0f * dpz - 16.0f * dvz * dt - 30.0f * vz * dt + az * dt_2 + 3.0f * daz * dt_2)) / dt_4,
+  (3.0f * (20.0f * dpz - 12.0f * dvz * dt - 20.0f * vz * dt + 2.0f * az * dt_2 + 3.0f * daz * dt_2)) / dt_3,
+  // Partial derivative of time.
+  (-3.0f) / (2.0f * dt_6) * 
+  (4.0f * dt_4 * a.transpose() * a +
+  3.0f * dt_4 * da.transpose() * da +
+  1200.0f * dp.transpose() * dp +
+  192.0f * dt_2 * dv.transpose() * dv +
+  720.0f * dt_2 * v.transpose() * v +
+  2.0f * -16.0f * dt_3 * a.transpose() * dv +
+  2.0f * -48.0f * dt_3 * da.transpose() * dv +
+  2.0f * -80.0f * dt_3 * da.transpose() * v +
+  2.0f * -960.0f * dt * dp.transpose() * dv +
+  2.0f * 120.0f * dt_2 * da.transpose() * dp +
+  2.0f * -1920.0f * dt * dp.transpose() * v);
   // clang-format on
+  // Results.
+  std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+            Eigen::Matrix<float, ALL_DIM, 1>>
+      cost;
+  cost.first =
+      state_cost.first + time_cost.first + kSmoothWeight * smooth_cost.first;
+  cost.second =
+      state_cost.second + time_cost.second + kSmoothWeight * smooth_cost.second;
   return cost;
 }
 
 float DynamicVoronoi3D::GetTrajRealCost(
-    const Eigen::Matrix<float, 13, 1> &xu, const IntPoint3D &bubble_1,
+    const Eigen::Matrix<float, ALL_DIM, 1> &xu, const IntPoint3D &bubble_1,
     const float radius_1, const IntPoint3D &bubble_2, const float radius_2,
     const float max_vel, const float max_acc, const float coeff) {
   const float px = xu(0);
@@ -1908,10 +2028,23 @@ float DynamicVoronoi3D::GetTrajRealCost(
   const float vz = xu(7);
   const float az = xu(8);
 
-  const float jx = xu(9);
-  const float jy = xu(10);
-  const float jz = xu(11);
-  const float dt = xu(12);
+  const float dpx = xu(9);
+  const float dvx = xu(10);
+  const float dax = xu(11);
+
+  const float dpy = xu(12);
+  const float dvy = xu(13);
+  const float day = xu(14);
+
+  const float dpz = xu(15);
+  const float dvz = xu(16);
+  const float daz = xu(17);
+
+  const float dt = xu(18);
+  const float dt_2 = dt * dt;
+  const float dt_3 = dt_2 * dt;
+  const float dt_4 = dt_3 * dt;
+  const float dt_5 = dt_4 * dt;
 
   float real_cost = 0.0f;
   // Constraints of bubble 1.
@@ -1968,14 +2101,58 @@ float DynamicVoronoi3D::GetTrajRealCost(
   if (dt < kMinTimeStep) {
     real_cost += kBndWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep);
   }
-  // Time cost and smoothness cost.
-  real_cost += kTimeWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep) +
-               kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz) * dt;
+  // Time cost.
+  real_cost += kTimeWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep);
+  // Smoothness cost.
+
+  Eigen::Matrix3f A_inv, B;
+  // clang-format off
+  A_inv << 
+  10.0f / dt_3, -4.0f / dt_2, 1.0f / (2 * dt), 
+  -15.0f / dt_4, 7.0f / dt_3, -1.0f / dt_2,
+  6.0f / dt_5, -3.0f / dt_4, 1.0f / (2.0f * dt_3);
+  B <<
+  0.0f,   dt, 0.5 * dt_2,
+  0.0f, 0.0f,         dt,
+  0.0f, 0.0f,       0.0f;
+  // clang-format on
+  Eigen::Vector3f state, dstate;
+  Eigen::Vector3f coeff345;
+  state << px, vx, ax;
+  dstate << dpx, dvx, dax;
+  coeff345 = A_inv * (dstate - B * state);
+  const float Jx = GetSmoothCost(coeff345, dt);
+  state << py, vy, ay;
+  dstate << dpy, dvy, day;
+  coeff345 = A_inv * (dstate - B * state);
+  const float Jy = GetSmoothCost(coeff345, dt);
+  state << pz, vz, az;
+  dstate << dpz, dvz, daz;
+  coeff345 = A_inv * (dstate - B * state);
+  const float Jz = GetSmoothCost(coeff345, dt);
+  real_cost += kSmoothWeight * (Jx + Jy + Jz);
   return real_cost;
 }
 
-std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>>
-DynamicVoronoi3D::GetTrajTermCost(const Eigen::Matrix<float, 13, 1> &xu,
+float DynamicVoronoi3D::GetSmoothCost(const Eigen::Vector3f &coeff,
+                                      const float dt) {
+  const float a3 = coeff(0);
+  const float a4 = coeff(1);
+  const float a5 = coeff(2);
+  const float dt_2 = dt * dt;
+  const float dt_3 = dt_2 * dt;
+  const float dt_4 = dt_3 * dt;
+  const float dt_5 = dt_4 * dt;
+  const float J = 18.0f * a3 * a3 * dt +
+                  dt_3 * (96.0f * a4 * a4 + 120.0f * a3 * a5) +
+                  360.0f * a5 * a5 * dt_5 + 72.0f * a3 * a4 * dt_2 +
+                  360.0f * a4 * a5 * dt_4;
+  return J;
+}
+
+std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+          Eigen::Matrix<float, ALL_DIM, 1>>
+DynamicVoronoi3D::GetTrajTermCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
                                   const IntPoint3D &goal) {
   const float px = xu(0);
   const float vx = xu(1);
@@ -1989,27 +2166,12 @@ DynamicVoronoi3D::GetTrajTermCost(const Eigen::Matrix<float, 13, 1> &xu,
   const float vz = xu(7);
   const float az = xu(8);
 
-  const float jx = xu(9);
-  const float jy = xu(10);
-  const float jz = xu(11);
-  const float dt = xu(12);
-
-  std::pair<Eigen::Matrix<float, 13, 13>, Eigen::Matrix<float, 13, 1>> cost;
+  std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+            Eigen::Matrix<float, ALL_DIM, 1>>
+      cost;
   // clang-format off
-  cost.first <<
-  kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kTermWeight, 0.0f, 0.0f, 0.0f, 0.0f,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, 0.0f, kSmoothWeight * jx,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, 0.0f, kSmoothWeight * jy,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * dt, kSmoothWeight * jz,
-  0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, kSmoothWeight * jx, kSmoothWeight * jy, kSmoothWeight * jz, kTimeWeight;
+  cost.first = Eigen::Matrix<float, ALL_DIM, ALL_DIM>::Zero();
+  cost.first.block<STATE_DIM, STATE_DIM>(0, 0).diagonal().setConstant(kTermWeight);
   cost.second <<
   kTermWeight * (px - goal.x),
   kTermWeight * vx,
@@ -2020,16 +2182,16 @@ DynamicVoronoi3D::GetTrajTermCost(const Eigen::Matrix<float, 13, 1> &xu,
   kTermWeight * (pz - goal.z),
   kTermWeight * vz,
   kTermWeight * az,
-  kSmoothWeight * jx * dt,
-  kSmoothWeight * jy * dt,
-  kSmoothWeight * jz * dt,
-  kTimeWeight * dt + kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz);
+  0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f,
+  0.0f, 0.0f, 0.0f,
+  0.0f;
   // clang-format on
   return cost;
 }
 
 float DynamicVoronoi3D::GetTrajRealTermCost(
-    const Eigen::Matrix<float, 13, 1> &xu, const IntPoint3D &goal) {
+    const Eigen::Matrix<float, ALL_DIM, 1> &xu, const IntPoint3D &goal) {
   const float px = xu(0);
   const float vx = xu(1);
   const float ax = xu(2);
@@ -2042,11 +2204,6 @@ float DynamicVoronoi3D::GetTrajRealTermCost(
   const float vz = xu(7);
   const float az = xu(8);
 
-  const float jx = xu(9);
-  const float jy = xu(10);
-  const float jz = xu(11);
-  const float dt = xu(12);
-
   float real_cost = 0.0;
   const float dx = px - goal.x;
   const float dy = py - goal.y;
@@ -2056,7 +2213,5 @@ float DynamicVoronoi3D::GetTrajRealTermCost(
                kTermWeight * 0.5f * vy * vy + kTermWeight * 0.5f * ay * ay +
                kTermWeight * 0.5f * dz * dz + kTermWeight * 0.5f * vz * vz +
                kTermWeight * 0.5f * az * az;
-  real_cost += kTimeWeight * 0.5f * dt * dt +
-               kSmoothWeight * 0.5f * (jx * jx + jy * jy + jz * jz) * dt;
   return real_cost;
 }
