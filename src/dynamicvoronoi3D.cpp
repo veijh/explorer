@@ -3,20 +3,21 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <queue>
 #include <unordered_map>
 
 namespace {
-constexpr int kMaxIteration = 200;
+constexpr int kMaxIteration = 100;
 constexpr float kConvergenceThreshold = 0.05f;
-constexpr float kTrajConvergenceThreshold = 1.0f;
+constexpr float kTrajConvergenceThreshold = 100.0f;
 constexpr float kTermWeight = 1000.0f;
 constexpr float kTimeBndWeight = 100000.0f;
 constexpr float kBndWeight = 10000.0f;
 constexpr float kWeight = 100.0f;
-constexpr float kSmoothWeight = 10.0f;
-constexpr float kTimeWeight = 0.0f;
+constexpr float kSmoothWeight = 1.0f;
+constexpr float kTimeWeight = 15.0f;
 constexpr int kMaxLineSearchIter = 10;
 constexpr int kDeadEndThreshold = 10;
 constexpr int kObstacleWaveInibitDistance = 5;
@@ -24,6 +25,7 @@ constexpr float kMaxVelocity = 15.0f;
 constexpr float kMaxAcceleration = 10.0f;
 constexpr float kRegularization = 0.0f;
 constexpr float kMinTimeStep = 0.1f;
+constexpr float kInitialTimeScale = 2.0f;
 } // namespace
 
 const std::vector<IntPoint3D> nbr_offsets = {
@@ -1423,26 +1425,12 @@ float DynamicVoronoi3D::GetRealTermCost(const Eigen::Matrix<float, 6, 1> &xu,
   return real_cost;
 }
 
-iLQRTrajectory DynamicVoronoi3D::GetiLQRTrajectory(
-    const std::vector<IntPoint3D> &temp_path,
-    const std::vector<IntPoint3D> &temp_ilqr_path) {
+iLQRTrajectory
+DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
+                                    const std::vector<IntPoint3D> &ilqr_path) {
 
   iLQRTrajectory ilqr_traj;
   std::vector<Eigen::Matrix<float, ALL_DIM, 1>> traj;
-  std::vector<IntPoint3D> path;
-  path.reserve(5);
-  path.emplace_back(IntPoint3D(0, 0, 0));
-  path.emplace_back(IntPoint3D(10, 0, 0));
-  path.emplace_back(IntPoint3D(20, 0, 0));
-  path.emplace_back(IntPoint3D(30, 0, 0));
-  path.emplace_back(IntPoint3D(40, 0, 0));
-
-  std::vector<IntPoint3D> ilqr_path;
-  ilqr_path.reserve(4);
-  ilqr_path.emplace_back(IntPoint3D(0, 0, 0));
-  ilqr_path.emplace_back(IntPoint3D(15, 0, 0));
-  ilqr_path.emplace_back(IntPoint3D(25, 0, 0));
-  ilqr_path.emplace_back(IntPoint3D(40, 0, 0));
   TimeTrack track;
   if (path.empty() || path.size() < 2) {
     return ilqr_traj;
@@ -1453,7 +1441,7 @@ iLQRTrajectory DynamicVoronoi3D::GetiLQRTrajectory(
   std::vector<float> radius;
   radius.reserve(num_bubbles);
   for (int i = 0; i < num_bubbles; ++i) {
-    radius.emplace_back(15.0f);
+    radius.emplace_back(getDistance(bubbles[i].x, bubbles[i].y, bubbles[i].z));
   }
   // iLQR Path Optimization.
   const int num_steps = path.size() - 1;
@@ -1474,6 +1462,71 @@ iLQRTrajectory DynamicVoronoi3D::GetiLQRTrajectory(
   const IntPoint3D start = path.front();
   const IntPoint3D goal = path.back();
 
+  // // clang-format off
+  // x_hat_vecs[0] <<
+  // start.x, 0.0f, 0.0f,
+  // start.y, 0.0f, 0.0f,
+  // start.z, 0.0f, 0.0f;
+  // // clang-format on
+  // xu_vecs[0].block<STATE_DIM, 1>(0, 0) = x_hat_vecs[0];
+
+  // for (int i = 1; i < num_steps - 1; ++i) {
+  //   const float delta_c = GetDistanceBetween(bubbles[i - 1], bubbles[i]);
+  //   const float dist =
+  //       0.5f * (delta_c + (radius[i - 1] + radius[i]) *
+  //                             (radius[i - 1] - radius[i]) / delta_c);
+  //   const float x_initial =
+  //       bubbles[i - 1].x + dist / delta_c * (bubbles[i].x - bubbles[i -
+  //       1].x);
+  //   const float y_initial =
+  //       bubbles[i - 1].y + dist / delta_c * (bubbles[i].y - bubbles[i -
+  //       1].y);
+  //   const float z_initial =
+  //       bubbles[i - 1].z + dist / delta_c * (bubbles[i].z - bubbles[i -
+  //       1].z);
+  //   // clang-format off
+  //   x_hat_vecs[i] <<
+  //   x_initial, 0.0f, 0.0f,
+  //   y_initial, 0.0f, 0.0f,
+  //   z_initial, 0.0f, 0.0f;
+  //   // clang-format on
+
+  //   // Initial Guess.
+  //   xu_vecs[i].block<STATE_DIM, 1>(0, 0) = x_hat_vecs[i];
+  //   xu_vecs[i - 1].block<CONTROL_DIM - 1, 1>(STATE_DIM, 0) =
+  //       xu_vecs[i].block<STATE_DIM, 1>(0, 0) -
+  //       xu_vecs[i - 1].block<STATE_DIM, 1>(0, 0);
+  //   const float initial_dx = xu_vecs[i](0) - xu_vecs[i - 1](0);
+  //   const float initial_dy = xu_vecs[i](3) - xu_vecs[i - 1](3);
+  //   const float initial_dz = xu_vecs[i](6) - xu_vecs[i - 1](6);
+  //   xu_vecs[i - 1](ALL_DIM - 1) =
+  //       kInitialTimeScale * std::hypot(initial_dx, initial_dy, initial_dz) /
+  //       kMaxVelocity;
+  // }
+
+  // // clang-format off
+  // x_hat_vecs[num_steps - 1] <<
+  // goal.x, 0.0f, 0.0f,
+  // goal.y, 0.0f, 0.0f,
+  // goal.z, 0.0f, 0.0f;
+  // // clang-format on
+
+  // xu_vecs[num_steps - 1].block<STATE_DIM, 1>(0, 0) = x_hat_vecs[num_steps -
+  // 1]; xu_vecs[num_steps - 2].block<CONTROL_DIM - 1, 1>(STATE_DIM, 0) =
+  //     xu_vecs[num_steps - 1].block<STATE_DIM, 1>(0, 0) -
+  //     xu_vecs[num_steps - 2].block<STATE_DIM, 1>(0, 0);
+  // {
+  //   const float initial_dx =
+  //       xu_vecs[num_steps - 1](0) - xu_vecs[num_steps - 2](0);
+  //   const float initial_dy =
+  //       xu_vecs[num_steps - 1](3) - xu_vecs[num_steps - 2](3);
+  //   const float initial_dz =
+  //       xu_vecs[num_steps - 1](6) - xu_vecs[num_steps - 2](6);
+  //   xu_vecs[num_steps - 2](ALL_DIM - 1) =
+  //       kInitialTimeScale * std::hypot(initial_dx, initial_dy, initial_dz) /
+  //       kMaxVelocity;
+  // }
+
   for (int i = 0; i < num_steps - 1; ++i) {
     // clang-format off
     x_hat_vecs[i] <<
@@ -1484,14 +1537,13 @@ iLQRTrajectory DynamicVoronoi3D::GetiLQRTrajectory(
 
     // Initial Guess.
     xu_vecs[i].block<STATE_DIM, 1>(0, 0) = x_hat_vecs[i];
+    const float dist = GetDistanceBetween(ilqr_path[i], ilqr_path[i + 1]);
     // clang-format off
     xu_vecs[i].block<CONTROL_DIM, 1>(STATE_DIM, 0) << 
     ilqr_path[i + 1].x - ilqr_path[i].x, 0.0f, 0.0f, 
     ilqr_path[i + 1].y - ilqr_path[i].y, 0.0f, 0.0f, 
-    ilqr_path[i + 1].z - ilqr_path[i].z, 0.0f, 0.0f, 10.0f;
+    ilqr_path[i + 1].z - ilqr_path[i].z, 0.0f, 0.0f, kInitialTimeScale * dist / kMaxVelocity;
     // clang-format on
-    std::cout << "xu_vecs[" << i << "]: " << xu_vecs[i].transpose()
-              << std::endl;
   }
   // clang-format off
   x_hat_vecs[num_steps - 1] <<
@@ -1503,8 +1555,13 @@ iLQRTrajectory DynamicVoronoi3D::GetiLQRTrajectory(
   xu_vecs[num_steps - 1].block<CONTROL_DIM, 1>(STATE_DIM, 0) << 
   0.0f, 0.0f, 0.0f, 
   0.0f, 0.0f, 0.0f, 
-  0.0f, 0.0f, 0.0f, 10.0f;
+  0.0f, 0.0f, 0.0f, 0.0f;
   // clang-format on
+
+  for (int i = 0; i < num_steps; ++i) {
+    std::cout << "xu_vecs[" << i << "]: " << xu_vecs[i].transpose()
+              << std::endl;
+  }
 
   // Calculate the coefficents.
   std::cout << "start ilqr optimization..." << std::endl;
@@ -1634,6 +1691,7 @@ iLQRTrajectory DynamicVoronoi3D::GetiLQRTrajectory(
       xu_vecs[num_steps - 1].block<STATE_DIM, 1>(0, 0) =
           x_hat_vecs[num_steps - 1];
       next_cost_sum += GetTrajRealTermCost(xu_vecs[num_steps - 1], goal);
+      // std::cout << "next_cost_sum: " << next_cost_sum << std::endl;
       // Check if J satisfy line search condition.
       const float ratio_decrease =
           (next_cost_sum - cost_sum) /
@@ -1678,8 +1736,12 @@ iLQRTrajectory DynamicVoronoi3D::GetiLQRTrajectory(
     }
   }
   // Output the trajectory.
+  std::cout << std::fixed << std::setprecision(4);
   for (int i = 0; i < num_steps; ++i) {
-    std::cout << xu_vecs[i].transpose() << std::endl;
+    for (int j = 0; j < xu_vecs[i].rows(); ++j) {
+      std::cout << std::setw(10) << xu_vecs[i](j); // 设置宽度为10
+    }
+    std::cout << std::endl;
   }
   ilqr_traj.traj = std::move(xu_vecs);
   return ilqr_traj;
@@ -1965,17 +2027,19 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
   const float ddst_dvz = (24.0f * (60.0f * dpz - 24.0f * dvz * dt - 45.0f * vz * dt + az * dt_2 + 3.0f * daz * dt_2)) / dt_5;
   const float ddst_daz = -(3.0f * (60.0f * dpz - 24.0f * dvz * dt - 40.0f * vz * dt + 2.0f * az * dt_2 + 3.0f * daz * dt_2)) / dt_4;
   const float ddst_t = (3.0f / dt_7) * 
-  (a.transpose() * (4.0f * dt_4)  * a +
-  a.transpose() * (4.0f * dt_4) * da +
-  a.transpose() * (-24.0f * dt_3) * dv +
-  da.transpose() * (3.0f * dt_4) * da +
-  da.transpose() * (240.0f * dt_2) * dp +
-  da.transpose() * ((-72.0f * dt_3) * dv + (-120.0f * dt_3) * v) +
-  dp.transpose() * (3600.0f) * dp +
-  dp.transpose() * ((-2400.0f * dt) * dv + (-4800.0f * dt) * v) +
-  dv.transpose() * (384.0f * dt_2) * dv +
-  dv.transpose() * (1440.0f * dt_2) * v +
-  v.transpose() * (1440.0f * dt_2) * v).value();
+  ((4.0f * dt_4)  * a.transpose() * a +
+  (4.0f * dt_4) * a.transpose() * da +
+  (-24.0f * dt_3) * a.transpose() * dv +
+  (3.0f * dt_4) * da.transpose() * da +
+  (240.0f * dt_2) * da.transpose() * dp +
+  (-72.0f * dt_3) * da.transpose() * dv +
+  (-120.0f * dt_3) * da.transpose() * v +
+  (3600.0f) * dp.transpose() * dp +
+  (-2400.0f * dt) * dp.transpose() * dv +
+  (-4800.0f * dt) * dp.transpose() * v +
+  (384.0f * dt_2) * dv.transpose() * dv +
+  (1440.0f * dt_2) * dv.transpose() * v +
+  (1440.0f * dt_2) * v.transpose() * v)(0, 0);
   Eigen::Matrix3f dds_xx;
   dds_xx << 
   0.0f,          0.0f,       0.0f, 
@@ -1985,7 +2049,7 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
   dds_uu << 
   720.0f / dt_5, -360.0f / dt_4,  60.0f / dt_3,
   -360.0f / dt_4, 192.0f / dt_3, -36.0f / dt_2,
-  60.0f /dt_3,     -36.0f /dt_2,   9.0f / dt_2;
+  60.0f /dt_3,     -36.0f /dt_2,     9.0f / dt;
   Eigen::Matrix3f dds_xu;
   dds_xu << 
   0.0f,                    0.0f,          0.0f, 
@@ -2044,16 +2108,18 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
   // Partial derivative of time.
   (-3.0f) / (2.0f * dt_6) * 
   (4.0f * dt_4 * a.transpose() * a +
+  4.0f * dt_4 * a.transpose() * da +
+  -16.0f * dt_3 * a.transpose() * dv +
   3.0f * dt_4 * da.transpose() * da +
+  120.0f * dt_2 * da.transpose() * dp +
+  -48.0f * dt_3 * da.transpose() * dv +
+  -80.0f * dt_3 * da.transpose() * v +
   1200.0f * dp.transpose() * dp +
+  -960.0f * dt * dp.transpose() * dv +
+  -1920.0f * dt * dp.transpose() * v +
   192.0f * dt_2 * dv.transpose() * dv +
-  720.0f * dt_2 * v.transpose() * v +
-  2.0f * -16.0f * dt_3 * a.transpose() * dv +
-  2.0f * -48.0f * dt_3 * da.transpose() * dv +
-  2.0f * -80.0f * dt_3 * da.transpose() * v +
-  2.0f * -960.0f * dt * dp.transpose() * dv +
-  2.0f * 120.0f * dt_2 * da.transpose() * dp +
-  2.0f * -1920.0f * dt * dp.transpose() * v);
+  720.0f * dt_2 * dv.transpose() * v +
+  720.0f * dt_2 * v.transpose() * v);
   // clang-format on
   // Results.
   std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
@@ -2149,6 +2215,7 @@ float DynamicVoronoi3D::GetTrajRealCost(
   } else if (az < -max_acc) {
     real_cost += kBndWeight * 0.5f * (az + max_acc) * (az + max_acc);
   }
+  // std::cout << "State constraint cost: " << real_cost << std::endl;
   // Time constraint.
   if (dt < kMinTimeStep) {
     real_cost +=
@@ -2156,12 +2223,15 @@ float DynamicVoronoi3D::GetTrajRealCost(
   }
   // Time cost.
   real_cost += kTimeWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep);
-  // Smoothness cost.
+  // std::cout << "Time constraint cost: "
+  //           << kTimeWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep)
+  //           << std::endl;
 
+  // Smoothness cost.
   Eigen::Matrix3f A_inv, B;
   // clang-format off
   A_inv << 
-  10.0f / dt_3, -4.0f / dt_2, 1.0f / (2 * dt), 
+  10.0f / dt_3, -4.0f / dt_2, 1.0f / (2.0f * dt), 
   -15.0f / dt_4, 7.0f / dt_3, -1.0f / dt_2,
   6.0f / dt_5, -3.0f / dt_4, 1.0f / (2.0f * dt_3);
   B <<
@@ -2184,6 +2254,8 @@ float DynamicVoronoi3D::GetTrajRealCost(
   coeff345 = A_inv * (dstate - B * state);
   const float Jz = GetSmoothCost(coeff345, dt);
   real_cost += kSmoothWeight * (Jx + Jy + Jz);
+  // std::cout << "Smoothness cost: " << kSmoothWeight * (Jx + Jy + Jz)
+  //           << std::endl;
   return real_cost;
 }
 
@@ -2266,5 +2338,6 @@ float DynamicVoronoi3D::GetTrajRealTermCost(
                kTermWeight * 0.5f * vy * vy + kTermWeight * 0.5f * ay * ay +
                kTermWeight * 0.5f * dz * dz + kTermWeight * 0.5f * vz * vz +
                kTermWeight * 0.5f * az * az;
+  // std::cout << "Term cost: " << real_cost << std::endl;
   return real_cost;
 }
