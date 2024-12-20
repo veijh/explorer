@@ -94,6 +94,13 @@ struct iLQRTrajectory {
   float total_time;
 };
 
+struct RealCostOutput {
+  float total_cost;
+  float state_cost;
+  float time_cost;
+  float smooth_cost;
+};
+
 //! A DynamicVoronoi3D object computes and updates a distance map and Voronoi
 //! diagram.
 class DynamicVoronoi3D {
@@ -208,11 +215,12 @@ public:
               const IntPoint3D &bubble_1, const float radius_1,
               const IntPoint3D &bubble_2, const float radius_2,
               const float max_vel, const float max_acc, const float coeff);
-  float GetTrajRealCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
-                        const IntPoint3D &bubble_1, const float radius_1,
-                        const IntPoint3D &bubble_2, const float radius_2,
-                        const float max_vel, const float max_acc,
-                        const float coeff);
+  RealCostOutput GetTrajRealCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
+                                 const IntPoint3D &bubble_1,
+                                 const float radius_1,
+                                 const IntPoint3D &bubble_2,
+                                 const float radius_2, const float max_vel,
+                                 const float max_acc, const float coeff);
   float GetSmoothCost(const Eigen::Vector3f &coeff, const float dt);
   std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
             Eigen::Matrix<float, ALL_DIM, 1>>
