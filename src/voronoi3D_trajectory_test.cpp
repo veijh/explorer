@@ -560,6 +560,16 @@ int main(int argc, char *argv[]) {
   waypoint.id = 0;
   waypoint.type = visualization_msgs::Marker::LINE_STRIP;
 
+  visualization_msgs::Marker trajectory;
+  trajectory.header.frame_id = "map";
+  trajectory.header.stamp = ros::Time::now();
+  trajectory.ns = "trajectory";
+  trajectory.action = visualization_msgs::Marker::ADD;
+  trajectory.scale.x = 0.1;
+  trajectory.pose.orientation.w = 1.0;
+  trajectory.id = 0;
+  trajectory.type = visualization_msgs::Marker::LINE_STRIP;
+
   std::vector<ros::Publisher> maps_pub(num_floors);
   for (int floor_iter = 0; floor_iter < num_floors; ++floor_iter) {
     maps_pub[floor_iter] = nh.advertise<visualization_msgs::Marker>(
@@ -576,6 +586,8 @@ int main(int argc, char *argv[]) {
       nh.advertise<visualization_msgs::MarkerArray>("/corridor", 10);
   ros::Publisher astar_pub =
       nh.advertise<visualization_msgs::Marker>("/astar_wp", 10);
+  ros::Publisher traj_pub =
+      nh.advertise<visualization_msgs::Marker>("/ilqr_traj", 10);
 
   // 设定起点
   const Eigen::Vector3f start_pt = {-20.0, -20.0, 1.0};
@@ -709,6 +721,76 @@ int main(int argc, char *argv[]) {
       track.SetStartTime();
       iLQRTrajectory ilqr_traj = voronoi.GetiLQRTrajectory(path, ilqr_path);
       track.OutputPassingTime("GetiLQRTrajectory");
+
+      // Visualize the trajectory.
+      trajectory.points.clear();
+      trajectory.colors.clear();
+      const auto traj = ilqr_traj.traj;
+      const int num_traj_points = traj.size();
+      for (int points_iter = 0; points_iter < num_traj_points - 1;
+           ++points_iter) {
+        const float dt = traj[points_iter](18);
+        const float dt_2 = dt * dt;
+        const float dt_3 = dt_2 * dt;
+        const float dt_4 = dt_3 * dt;
+        const float dt_5 = dt_4 * dt;
+        // clang-format off
+        Eigen::Matrix<float, 6, 6> A;
+        A <<
+        1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f,
+        1.0f, dt, dt_2, dt_3, dt_4, dt_5,
+        0.0f, 1.0f, 2.0f * dt, 3.0f * dt_2, 4.0f * dt_3, 5.0f * dt_4,
+        0.0f, 0.0f, 2.0f, 6.0f * dt, 12.0f * dt_2, 20.0f * dt_3;
+        Eigen::Matrix<float, 6, 1> state_x;
+        Eigen::Matrix<float, 6, 1> state_y;
+        Eigen::Matrix<float, 6, 1> state_z;
+        const Eigen::Matrix<float, 19, 1> state = traj[points_iter];
+        const Eigen::Matrix<float, 19, 1> next_state = traj[points_iter+1];
+        state_x << state(0), state(1), state(2), next_state(0), next_state(1), next_state(2);
+        state_y << state(3), state(4), state(5), next_state(3), next_state(4), next_state(5);
+        state_z << state(6), state(7), state(8), next_state(6), next_state(7), next_state(8);
+        // clang-format on
+        const Eigen::Matrix<float, 6, 1> ax_coeff = A.inverse() * state_x;
+        const Eigen::Matrix<float, 6, 1> ay_coeff = A.inverse() * state_y;
+        const Eigen::Matrix<float, 6, 1> az_coeff = A.inverse() * state_z;
+
+        for (float t = 0.0f; t <= dt; t += 0.05f) {
+          const float t_2 = t * t;
+          const float t_3 = t_2 * t;
+          const float t_4 = t_3 * t;
+          const float t_5 = t_4 * t;
+          Eigen::Matrix<float, 1, 6> p_coeff;
+          Eigen::Matrix<float, 1, 6> v_coeff;
+          p_coeff << 1, t, t_2, t_3, t_4, t_5;
+          v_coeff << 0, 1, 2 * t, 3 * t_2, 4 * t_3, 5 * t_4;
+          // Calculate the position.
+          const float pxt = p_coeff * ax_coeff;
+          const float pyt = p_coeff * ay_coeff;
+          const float pzt = p_coeff * az_coeff;
+
+          // Calculate the velocity.
+          const float vxt = v_coeff * ax_coeff;
+          const float vyt = v_coeff * ay_coeff;
+          const float vzt = v_coeff * az_coeff;
+          const float vel = std::hypot(vxt, vyt, vzt);
+
+          trajectory.points.emplace_back();
+          trajectory.points.back().x =
+              min_x + pxt * resolution + 0.5 * resolution;
+          trajectory.points.back().y =
+              min_y + pyt * resolution + 0.5 * resolution;
+          trajectory.points.back().z =
+              min_z + pzt * resolution + 0.5 * resolution;
+          trajectory.colors.emplace_back();
+          trajectory.colors.back().r = vel / (15.0f);
+          trajectory.colors.back().g = 1.0;
+          trajectory.colors.back().b = 1.0;
+          trajectory.colors.back().a = 1.0;
+        }
+      }
+      traj_pub.publish(trajectory);
     }
 
     // A*寻路，并统计时间
