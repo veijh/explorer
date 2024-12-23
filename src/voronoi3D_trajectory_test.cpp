@@ -8,6 +8,7 @@
 #include <geometry_msgs/Point.h>
 #include <iomanip>
 #include <iostream>
+#include <nav_msgs/Odometry.h>
 #include <random>
 #include <ros/ros.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 #include <visualization_msgs/MarkerArray.h>
 
 #define LOG_OUTPUT (false)
+#define ASTAR (false)
 
 namespace {
 const float min_x = -25.0;
@@ -264,6 +266,24 @@ void create_stair(
   }
 }
 
+void publish_odometry(const ros::Publisher &odom_pub,
+                      const std::vector<nav_msgs::Odometry> &traj,
+                      const float sample_time) {
+  const int num_samples = traj.size();
+  ros::Rate rate(1.0f / sample_time);
+  for (int i = 0; i < num_samples; ++i) {
+    nav_msgs::Odometry odom;
+    odom.header.stamp = ros::Time::now();
+    // 设置机器人的位置（坐标）和朝向（姿态）
+    odom.header.frame_id = "map";
+    odom.pose = traj[i].pose;
+    odom.twist = traj[i].twist;
+    // 发布消息
+    odom_pub.publish(odom);
+    rate.sleep();
+  }
+}
+
 int main(int argc, char *argv[]) {
   ros::init(argc, argv, "voronoi3D_test");
   ros::NodeHandle nh("");
@@ -386,6 +406,8 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+
+  std::vector<nav_msgs::Odometry> odom_msgs;
 
   visualization_msgs::Marker gvd_points;
   gvd_points.header.frame_id = "map";
@@ -620,121 +642,115 @@ int main(int argc, char *argv[]) {
   const int end_num = end_pts.size();
   int count = 0;
 
-  while (ros::ok()) {
-    rate.sleep();
-    ros::spinOnce();
-    for (int floor_iter = 0; floor_iter < num_floors; ++floor_iter) {
-      maps_pub[floor_iter].publish(cube_lists[floor_iter]);
-    }
-    gvd_pub.publish(gvd_points);
-    connect_pub.publish(connectivity);
+  for (int floor_iter = 0; floor_iter < num_floors; ++floor_iter) {
+    maps_pub[floor_iter].publish(cube_lists[floor_iter]);
+  }
+  gvd_pub.publish(gvd_points);
+  connect_pub.publish(connectivity);
 
-    if (count >= end_num) {
-      return 0;
-    }
-    // Eigen::Vector3f end_pt = end_pts[count];
-    Eigen::Vector3f end_pt = {-20.0, -20.0, 7.5};
-    ++count;
+  if (count >= end_num) {
+    return 0;
+  }
+  // Eigen::Vector3f end_pt = end_pts[count];
+  Eigen::Vector3f end_pt = {-20.0, -20.0, 7.5};
+  ++count;
 
-    const int end_index_x = (end_pt.x() - min_x) / resolution;
-    const int end_index_y = (end_pt.y() - min_y) / resolution;
-    const int end_index_z = (end_pt.z() - min_z) / resolution;
+  const int end_index_x = (end_pt.x() - min_x) / resolution;
+  const int end_index_y = (end_pt.y() - min_y) / resolution;
+  const int end_index_z = (end_pt.z() - min_z) / resolution;
+  if (LOG_OUTPUT) {
+    outFile << "End, " << end_pt.x() << ", " << end_pt.y() << ", " << end_pt.z()
+            << std::endl;
+  }
+  const IntPoint3D start_point(start_index_x, start_index_y, start_index_z);
+  const IntPoint3D goal_point(end_index_x, end_index_y, end_index_z);
+  track.SetStartTime();
+  AstarOutput astar_output = voronoi.GetAstarPath(start_point, goal_point);
+  if (LOG_OUTPUT) {
+    outFile << "Rough Path Time, " << track.OutputPassingTime("GetAstarPath")
+            << std::endl;
+  }
+  // Skip failed paths.
+  if (astar_output.success == false) {
+    return 0;
+  } else {
     if (LOG_OUTPUT) {
-      outFile << "End, " << end_pt.x() << ", " << end_pt.y() << ", "
-              << end_pt.z() << std::endl;
+      outFile << "Rough Num Exp, " << astar_output.num_expansions << std::endl;
+      outFile << "Rough Path Length, " << astar_output.path_length << std::endl;
     }
-    const IntPoint3D start_point(start_index_x, start_index_y, start_index_z);
-    const IntPoint3D goal_point(end_index_x, end_index_y, end_index_z);
+  }
+
+  const std::vector<IntPoint3D> &path = astar_output.path;
+  const int num_path_points = path.size();
+  path_marker.points.clear();
+  corridor.id = 0;
+  for (int i = 0; i < num_path_points; ++i) {
+    path_marker.points.emplace_back();
+    path_marker.points.back().x =
+        min_x + path[i].x * resolution + 0.5 * resolution;
+    path_marker.points.back().y =
+        min_y + path[i].y * resolution + 0.5 * resolution;
+    path_marker.points.back().z =
+        min_z + path[i].z * resolution + 0.5 * resolution;
+    corridor.id = corridor.id + 1;
+    corridor.pose.position.x =
+        min_x + path[i].x * resolution + 0.5 * resolution;
+    corridor.pose.position.y =
+        min_y + path[i].y * resolution + 0.5 * resolution;
+    corridor.pose.position.z =
+        min_z + path[i].z * resolution + 0.5 * resolution;
+    const float distance = voronoi.getDistance(path[i].x, path[i].y, path[i].z);
+    corridor.scale.x = 2 * distance * resolution;
+    corridor.scale.y = 2 * distance * resolution;
+    corridor.scale.z = 2 * distance * resolution;
+    corridors.markers.emplace_back(corridor);
+  }
+  // Postprocess the path.
+  if (!path.empty()) {
+    path_pub.publish(path_marker);
+    corridor_pub.publish(corridors);
+
+    // Use iLQR to refine the path.
     track.SetStartTime();
-    AstarOutput astar_output = voronoi.GetAstarPath(start_point, goal_point);
+    iLQROutput ilqr_output = voronoi.GetiLQRPath(path);
     if (LOG_OUTPUT) {
-      outFile << "Rough Path Time, " << track.OutputPassingTime("GetAstarPath")
+      outFile << "iLQR Path Time, " << track.OutputPassingTime("GetiLQRPath")
               << std::endl;
+      outFile << "iLQR Num Iter, " << ilqr_output.num_iter << std::endl;
+      outFile << "iLQR Path Length, " << ilqr_output.path_length << std::endl;
     }
-    // Skip failed paths.
-    if (astar_output.success == false) {
-      continue;
-    } else {
-      if (LOG_OUTPUT) {
-        outFile << "Rough Num Exp, " << astar_output.num_expansions
-                << std::endl;
-        outFile << "Rough Path Length, " << astar_output.path_length
-                << std::endl;
-      }
+    const std::vector<IntPoint3D> &ilqr_path = ilqr_output.path;
+    ilqr_path_marker.points.clear();
+    const int num_ilqr_path_points = ilqr_path.size();
+    for (int i = 0; i < num_ilqr_path_points; ++i) {
+      ilqr_path_marker.points.emplace_back();
+      ilqr_path_marker.points.back().x =
+          min_x + ilqr_path[i].x * resolution + 0.5 * resolution;
+      ilqr_path_marker.points.back().y =
+          min_y + ilqr_path[i].y * resolution + 0.5 * resolution;
+      ilqr_path_marker.points.back().z =
+          min_z + ilqr_path[i].z * resolution + 0.5 * resolution;
     }
+    ilqr_path_pub.publish(ilqr_path_marker);
 
-    const std::vector<IntPoint3D> &path = astar_output.path;
-    const int num_path_points = path.size();
-    path_marker.points.clear();
-    corridor.id = 0;
-    for (int i = 0; i < num_path_points; ++i) {
-      path_marker.points.emplace_back();
-      path_marker.points.back().x =
-          min_x + path[i].x * resolution + 0.5 * resolution;
-      path_marker.points.back().y =
-          min_y + path[i].y * resolution + 0.5 * resolution;
-      path_marker.points.back().z =
-          min_z + path[i].z * resolution + 0.5 * resolution;
-      corridor.id = corridor.id + 1;
-      corridor.pose.position.x =
-          min_x + path[i].x * resolution + 0.5 * resolution;
-      corridor.pose.position.y =
-          min_y + path[i].y * resolution + 0.5 * resolution;
-      corridor.pose.position.z =
-          min_z + path[i].z * resolution + 0.5 * resolution;
-      const float distance =
-          voronoi.getDistance(path[i].x, path[i].y, path[i].z);
-      corridor.scale.x = 2 * distance * resolution;
-      corridor.scale.y = 2 * distance * resolution;
-      corridor.scale.z = 2 * distance * resolution;
-      corridors.markers.emplace_back(corridor);
-    }
-    // Postprocess the path.
-    if (!path.empty()) {
-      path_pub.publish(path_marker);
-      corridor_pub.publish(corridors);
+    // Trajectory generation.
+    track.SetStartTime();
+    iLQRTrajectory ilqr_traj = voronoi.GetiLQRTrajectory(path, ilqr_path);
+    track.OutputPassingTime("GetiLQRTrajectory");
 
-      // Use iLQR to refine the path.
-      track.SetStartTime();
-      iLQROutput ilqr_output = voronoi.GetiLQRPath(path);
-      if (LOG_OUTPUT) {
-        outFile << "iLQR Path Time, " << track.OutputPassingTime("GetiLQRPath")
-                << std::endl;
-        outFile << "iLQR Num Iter, " << ilqr_output.num_iter << std::endl;
-        outFile << "iLQR Path Length, " << ilqr_output.path_length << std::endl;
-      }
-      const std::vector<IntPoint3D> &ilqr_path = ilqr_output.path;
-      ilqr_path_marker.points.clear();
-      const int num_ilqr_path_points = ilqr_path.size();
-      for (int i = 0; i < num_ilqr_path_points; ++i) {
-        ilqr_path_marker.points.emplace_back();
-        ilqr_path_marker.points.back().x =
-            min_x + ilqr_path[i].x * resolution + 0.5 * resolution;
-        ilqr_path_marker.points.back().y =
-            min_y + ilqr_path[i].y * resolution + 0.5 * resolution;
-        ilqr_path_marker.points.back().z =
-            min_z + ilqr_path[i].z * resolution + 0.5 * resolution;
-      }
-      ilqr_path_pub.publish(ilqr_path_marker);
-
-      // Trajectory generation.
-      track.SetStartTime();
-      iLQRTrajectory ilqr_traj = voronoi.GetiLQRTrajectory(path, ilqr_path);
-      track.OutputPassingTime("GetiLQRTrajectory");
-
-      // Visualize the trajectory.
-      trajectory.points.clear();
-      trajectory.colors.clear();
-      const auto traj = ilqr_traj.traj;
-      const int num_traj_points = traj.size();
-      for (int points_iter = 0; points_iter < num_traj_points - 1;
-           ++points_iter) {
-        const float dt = traj[points_iter](18);
-        const float dt_2 = dt * dt;
-        const float dt_3 = dt_2 * dt;
-        const float dt_4 = dt_3 * dt;
-        const float dt_5 = dt_4 * dt;
-        // clang-format off
+    // Visualize the trajectory.
+    trajectory.points.clear();
+    trajectory.colors.clear();
+    const auto traj = ilqr_traj.traj;
+    const int num_traj_points = traj.size();
+    for (int points_iter = 0; points_iter < num_traj_points - 1;
+         ++points_iter) {
+      const float dt = traj[points_iter](18);
+      const float dt_2 = dt * dt;
+      const float dt_3 = dt_2 * dt;
+      const float dt_4 = dt_3 * dt;
+      const float dt_5 = dt_4 * dt;
+      // clang-format off
         Eigen::Matrix<float, 6, 6> A;
         A <<
         1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
@@ -751,49 +767,61 @@ int main(int argc, char *argv[]) {
         state_x << state(0), state(1), state(2), next_state(0), next_state(1), next_state(2);
         state_y << state(3), state(4), state(5), next_state(3), next_state(4), next_state(5);
         state_z << state(6), state(7), state(8), next_state(6), next_state(7), next_state(8);
-        // clang-format on
-        const Eigen::Matrix<float, 6, 1> ax_coeff = A.inverse() * state_x;
-        const Eigen::Matrix<float, 6, 1> ay_coeff = A.inverse() * state_y;
-        const Eigen::Matrix<float, 6, 1> az_coeff = A.inverse() * state_z;
+      // clang-format on
+      const Eigen::Matrix<float, 6, 1> ax_coeff = A.inverse() * state_x;
+      const Eigen::Matrix<float, 6, 1> ay_coeff = A.inverse() * state_y;
+      const Eigen::Matrix<float, 6, 1> az_coeff = A.inverse() * state_z;
 
-        for (float t = 0.0f; t <= dt; t += 0.05f) {
-          const float t_2 = t * t;
-          const float t_3 = t_2 * t;
-          const float t_4 = t_3 * t;
-          const float t_5 = t_4 * t;
-          Eigen::Matrix<float, 1, 6> p_coeff;
-          Eigen::Matrix<float, 1, 6> v_coeff;
-          p_coeff << 1, t, t_2, t_3, t_4, t_5;
-          v_coeff << 0, 1, 2 * t, 3 * t_2, 4 * t_3, 5 * t_4;
-          // Calculate the position.
-          const float pxt = p_coeff * ax_coeff;
-          const float pyt = p_coeff * ay_coeff;
-          const float pzt = p_coeff * az_coeff;
+      for (float t = 0.0f; t <= dt; t += 0.05f) {
+        const float t_2 = t * t;
+        const float t_3 = t_2 * t;
+        const float t_4 = t_3 * t;
+        const float t_5 = t_4 * t;
+        Eigen::Matrix<float, 1, 6> p_coeff;
+        Eigen::Matrix<float, 1, 6> v_coeff;
+        p_coeff << 1, t, t_2, t_3, t_4, t_5;
+        v_coeff << 0, 1, 2 * t, 3 * t_2, 4 * t_3, 5 * t_4;
+        // Calculate the position.
+        const float pxt = p_coeff * ax_coeff;
+        const float pyt = p_coeff * ay_coeff;
+        const float pzt = p_coeff * az_coeff;
 
-          // Calculate the velocity.
-          const float vxt = v_coeff * ax_coeff;
-          const float vyt = v_coeff * ay_coeff;
-          const float vzt = v_coeff * az_coeff;
-          const float vel = std::hypot(vxt, vyt, vzt);
+        // Calculate the velocity.
+        const float vxt = v_coeff * ax_coeff;
+        const float vyt = v_coeff * ay_coeff;
+        const float vzt = v_coeff * az_coeff;
+        const float vel = std::hypot(vxt, vyt, vzt);
 
-          trajectory.points.emplace_back();
-          trajectory.points.back().x =
-              min_x + pxt * resolution + 0.5 * resolution;
-          trajectory.points.back().y =
-              min_y + pyt * resolution + 0.5 * resolution;
-          trajectory.points.back().z =
-              min_z + pzt * resolution + 0.5 * resolution;
-          trajectory.colors.emplace_back();
-          trajectory.colors.back().r = vel / (15.0f);
-          trajectory.colors.back().g = 1.0;
-          trajectory.colors.back().b = 1.0;
-          trajectory.colors.back().a = 1.0;
-        }
+        trajectory.points.emplace_back();
+        trajectory.points.back().x =
+            min_x + pxt * resolution + 0.5 * resolution;
+        trajectory.points.back().y =
+            min_y + pyt * resolution + 0.5 * resolution;
+        trajectory.points.back().z =
+            min_z + pzt * resolution + 0.5 * resolution;
+        trajectory.colors.emplace_back();
+        trajectory.colors.back().r = vel / (15.0f);
+        trajectory.colors.back().g = 0.0;
+        trajectory.colors.back().b = 1 - vel / (15.0f);
+        trajectory.colors.back().a = 1.0;
+        odom_msgs.emplace_back();
+        odom_msgs.back().header.frame_id = "map";
+        odom_msgs.back().pose.pose.position.x = trajectory.points.back().x;
+        odom_msgs.back().pose.pose.position.y = trajectory.points.back().y;
+        odom_msgs.back().pose.pose.position.z = trajectory.points.back().z;
+        odom_msgs.back().pose.pose.orientation.w = 1.0;
+        odom_msgs.back().twist.twist.linear.x = vxt * resolution;
+        odom_msgs.back().twist.twist.linear.y = vyt * resolution;
+        odom_msgs.back().twist.twist.linear.z = vzt * resolution;
       }
-      traj_pub.publish(trajectory);
     }
+    traj_pub.publish(trajectory);
+  }
 
-    // A*寻路，并统计时间
+  ros::Publisher odom_pub = nh.advertise<nav_msgs::Odometry>("/odom", 10);
+
+  // A*寻路，并统计时间
+  if (ASTAR) {
     track.SetStartTime();
     GridAstarOutput grid_astar_output =
         grid_astar.AstarPathDistance(start_pt, end_pt);
@@ -822,5 +850,15 @@ int main(int argc, char *argv[]) {
       waypoint.points.emplace_back(wp_pos);
     }
     astar_pub.publish(waypoint);
+  }
+
+  while (ros::ok()) {
+    rate.sleep();
+    ros::spinOnce();
+    for (int floor_iter = 0; floor_iter < num_floors; ++floor_iter) {
+      maps_pub[floor_iter].publish(cube_lists[floor_iter]);
+    }
+    traj_pub.publish(trajectory);
+    publish_odometry(odom_pub, odom_msgs, 0.05);
   }
 }

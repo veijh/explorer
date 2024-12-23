@@ -24,15 +24,15 @@ constexpr float kWeight = 100.0f;
 constexpr float kMaxVelocity = 15.0f;
 constexpr float kMaxAcceleration = 10.0f;
 constexpr float kMinTimeStep = 0.1f;
-constexpr float kInitialTimeScale = 2.0f;
-constexpr float kTrajConvergenceThreshold = 100.0f;
-constexpr float kTrajTermWeight = 10000.0f;
-constexpr float kTrajBndWeight = 1000.0f;
-constexpr float kTimeBndWeight = 10000.0f;
-constexpr float kSmoothWeight = 10.0f;
-constexpr float kTimeWeight = 100.0f;
+constexpr float kInitialTimeScale = 5.0f;
+constexpr float kTrajConvergenceThreshold = 1.0f;
+constexpr float kTrajTermWeight = 10.0f;
+constexpr float kTrajBndWeight = 1.0f;
+constexpr float kTimeBndWeight = 1.0f;
+constexpr float kSmoothWeight = 0.1f;
+constexpr float kTimeWeight = 1.0f;
 // Rgularization parameters.
-constexpr float kRegularization = 1.0f;
+constexpr float kRegularization = 0.1f;
 constexpr float kMaxRegularizationIter = 35;
 constexpr float kRegularizationScale = 1.6f;
 } // namespace
@@ -1490,23 +1490,24 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
         bubbles[i - 1].y + dist / delta_c * (bubbles[i].y - bubbles[i - 1].y);
     const float z_initial =
         bubbles[i - 1].z + dist / delta_c * (bubbles[i].z - bubbles[i - 1].z);
+    const float dx_initial = x_initial - xu_vecs[i - 1](0);
+    const float dy_initial = y_initial - xu_vecs[i - 1](3);
+    const float dz_initial = z_initial - xu_vecs[i - 1](6);
+    const float dt_initial = kInitialTimeScale *
+                             std::hypot(dx_initial, dy_initial, dz_initial) /
+                             kMaxVelocity;
     // clang-format off
     x_hat_vecs[i] <<
-    x_initial, 0.0f, 0.0f,
-    y_initial, 0.0f, 0.0f,
-    z_initial, 0.0f, 0.0f;
+    x_initial, dx_initial / dt_initial, 0.0f,
+    y_initial, dy_initial / dt_initial, 0.0f,
+    z_initial, dz_initial / dt_initial, 0.0f;
     // clang-format on
     // Initial Guess.
     xu_vecs[i].block<STATE_DIM, 1>(0, 0) = x_hat_vecs[i];
     xu_vecs[i - 1].block<CONTROL_DIM - 1, 1>(STATE_DIM, 0) =
         xu_vecs[i].block<STATE_DIM, 1>(0, 0) -
         xu_vecs[i - 1].block<STATE_DIM, 1>(0, 0);
-    const float initial_dx = xu_vecs[i](0) - xu_vecs[i - 1](0);
-    const float initial_dy = xu_vecs[i](3) - xu_vecs[i - 1](3);
-    const float initial_dz = xu_vecs[i](6) - xu_vecs[i - 1](6);
-    xu_vecs[i - 1](ALL_DIM - 1) =
-        kInitialTimeScale * std::hypot(initial_dx, initial_dy, initial_dz) /
-        kMaxVelocity;
+    xu_vecs[i - 1](ALL_DIM - 1) = dt_initial;
   }
   // clang-format off
   x_hat_vecs[num_steps - 1] <<
@@ -1519,15 +1520,16 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
       xu_vecs[num_steps - 1].block<STATE_DIM, 1>(0, 0) -
       xu_vecs[num_steps - 2].block<STATE_DIM, 1>(0, 0);
   {
-    const float initial_dx =
+    const float dx_initial =
         xu_vecs[num_steps - 1](0) - xu_vecs[num_steps - 2](0);
-    const float initial_dy =
+    const float dy_initial =
         xu_vecs[num_steps - 1](3) - xu_vecs[num_steps - 2](3);
-    const float initial_dz =
+    const float dz_initial =
         xu_vecs[num_steps - 1](6) - xu_vecs[num_steps - 2](6);
-    xu_vecs[num_steps - 2](ALL_DIM - 1) =
-        kInitialTimeScale * std::hypot(initial_dx, initial_dy, initial_dz) /
-        kMaxVelocity;
+    const float initial_dt = kInitialTimeScale *
+                             std::hypot(dx_initial, dy_initial, dz_initial) /
+                             kMaxVelocity;
+    xu_vecs[num_steps - 2](ALL_DIM - 1) = initial_dt;
   }
 
   // Initial Guess Solution 2.
@@ -1574,6 +1576,7 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
   float last_path_length = path_length;
   float time_sum = 0.0f;
   float last_time_sum = time_sum;
+  float reg_coeff = kRegularization;
   // Iteration Loop.
   for (int iter = 0; iter < kMaxIteration; ++iter) {
     Eigen::Matrix<float, STATE_DIM, STATE_DIM> V;
@@ -1610,72 +1613,73 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
               .total_cost;
       F_mats[k] = GetTransition(xu_vecs[k]);
     }
-    for (int k = num_steps - 1; k >= 0; --k) {
-      Eigen::Matrix<float, ALL_DIM, ALL_DIM> Q;
-      Eigen::Matrix<float, ALL_DIM, 1> q;
-      if (k == num_steps - 1) {
-        // Terminal cost.
-        const std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
-                        Eigen::Matrix<float, ALL_DIM, 1>>
-            cost = costs[k];
-        Q = cost.first;
-        q = cost.second;
-      } else {
-        const std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
-                        Eigen::Matrix<float, ALL_DIM, 1>>
-            cost = costs[k];
-        const Eigen::Matrix<float, STATE_DIM, ALL_DIM> F = F_mats[k];
-        Q = cost.first + F.transpose() * V * F;
-        q = cost.second + F.transpose() * v;
-      }
-      const Eigen::Matrix<float, STATE_DIM, STATE_DIM> Qxx =
-          Q.block<STATE_DIM, STATE_DIM>(0, 0);
-      const Eigen::Matrix<float, STATE_DIM, CONTROL_DIM> Qxu =
-          Q.block<STATE_DIM, CONTROL_DIM>(0, STATE_DIM);
-      const Eigen::Matrix<float, CONTROL_DIM, STATE_DIM> Qux =
-          Q.block<CONTROL_DIM, STATE_DIM>(STATE_DIM, 0);
-      const Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM> Quu =
-          Q.block<CONTROL_DIM, CONTROL_DIM>(STATE_DIM, STATE_DIM);
-      const Eigen::Matrix<float, STATE_DIM, 1> qx = q.block<STATE_DIM, 1>(0, 0);
-      const Eigen::Matrix<float, CONTROL_DIM, 1> qu =
-          q.block<CONTROL_DIM, 1>(STATE_DIM, 0);
+    // Calculate V/v and K/k.
+    bool is_backward_pass_done = false;
+    while (!is_backward_pass_done) {
+      bool is_Quu_full_rank = true;
+      for (int k = num_steps - 1; k >= 0; --k) {
+        Eigen::Matrix<float, ALL_DIM, ALL_DIM> Q;
+        Eigen::Matrix<float, ALL_DIM, 1> q;
+        if (k == num_steps - 1) {
+          // Terminal cost.
+          const std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+                          Eigen::Matrix<float, ALL_DIM, 1>>
+              cost = costs[k];
+          Q = cost.first;
+          q = cost.second;
+        } else {
+          const std::pair<Eigen::Matrix<float, ALL_DIM, ALL_DIM>,
+                          Eigen::Matrix<float, ALL_DIM, 1>>
+              cost = costs[k];
+          const Eigen::Matrix<float, STATE_DIM, ALL_DIM> F = F_mats[k];
+          Q = cost.first + F.transpose() * V * F;
+          q = cost.second + F.transpose() * v;
+        }
+        const Eigen::Matrix<float, STATE_DIM, STATE_DIM> Qxx =
+            Q.block<STATE_DIM, STATE_DIM>(0, 0);
+        const Eigen::Matrix<float, STATE_DIM, CONTROL_DIM> Qxu =
+            Q.block<STATE_DIM, CONTROL_DIM>(0, STATE_DIM);
+        const Eigen::Matrix<float, CONTROL_DIM, STATE_DIM> Qux =
+            Q.block<CONTROL_DIM, STATE_DIM>(STATE_DIM, 0);
+        const Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM> Quu =
+            Q.block<CONTROL_DIM, CONTROL_DIM>(STATE_DIM, STATE_DIM);
+        const Eigen::Matrix<float, STATE_DIM, 1> qx =
+            q.block<STATE_DIM, 1>(0, 0);
+        const Eigen::Matrix<float, CONTROL_DIM, 1> qu =
+            q.block<CONTROL_DIM, 1>(STATE_DIM, 0);
 
-      if (k == num_steps - 1) {
-        V = Qxx;
-        v = qx;
+        if (k == num_steps - 1) {
+          V = Qxx;
+          v = qx;
+        } else {
+          // Quu needs to be regularized.
+          Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM> Quu_reg = Quu;
+          const Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM> reg =
+              reg_coeff *
+              Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM>::Identity();
+          Quu_reg += reg;
+          if (std::fabs(Quu_reg.determinant()) < 1e-3) {
+            is_Quu_full_rank = false;
+            break;
+          }
+          K_mats[k] = -Quu_reg.inverse() * Qux;
+          k_vecs[k] = -Quu_reg.inverse() * qu;
+          const Eigen::Matrix<float, CONTROL_DIM, STATE_DIM> K_mat = K_mats[k];
+          const Eigen::Matrix<float, CONTROL_DIM, 1> k_vec = k_vecs[k];
+          V = Qxx + Qxu * K_mat + K_mat.transpose() * Qux +
+              K_mat.transpose() * Quu_reg * K_mat;
+          v = qx + Qxu * k_vec + K_mat.transpose() * qu +
+              K_mat.transpose() * Quu_reg * k_vec;
+          delta_V.first += k_vec.transpose() * qu;
+          delta_V.second += 0.5f * k_vec.transpose() * Quu_reg * k_vec;
+        }
+      }
+      if (is_Quu_full_rank) {
+        is_backward_pass_done = true;
       } else {
-        // Quu needs to be regularized.
-        Eigen::EigenSolver<Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM>>
-            solver;
-        Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM> Quu_reg = Quu;
-        Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM> reg =
-            kRegularization *
-            Eigen::Matrix<float, CONTROL_DIM, CONTROL_DIM>::Identity();
-        Quu_reg += reg;
-        // for (int regular_iter = 0; regular_iter < kMaxRegularizationIter;
-        //      ++regular_iter) {
-        //   solver.compute(Quu_reg, false);
-        //   const float min_eigen = solver.eigenvalues().real().minCoeff();
-        //   if (min_eigen < (1e-6f)) {
-        //     Quu_reg = Quu + reg;
-        //     reg *= kRegularizationScale;
-        //   } else {
-        //     std::cout << "Regularization done in " << regular_iter
-        //               << " iterations."
-        //               << " min eigenvalue: " << min_eigen << std::endl;
-        //     break;
-        //   }
-        // }
-        K_mats[k] = -Quu_reg.inverse() * Qux;
-        k_vecs[k] = -Quu_reg.inverse() * qu;
-        const Eigen::Matrix<float, CONTROL_DIM, STATE_DIM> K_mat = K_mats[k];
-        const Eigen::Matrix<float, CONTROL_DIM, 1> k_vec = k_vecs[k];
-        V = Qxx + Qxu * K_mat + K_mat.transpose() * Qux +
-            K_mat.transpose() * Quu_reg * K_mat;
-        v = qx + Qxu * k_vec + K_mat.transpose() * qu +
-            K_mat.transpose() * Quu_reg * k_vec;
-        delta_V.first += k_vec.transpose() * qu;
-        delta_V.second += 0.5f * k_vec.transpose() * Quu_reg * k_vec;
+        reg_coeff *= kRegularizationScale;
+        delta_V.first = 0.0f;
+        delta_V.second = 0.0f;
       }
     }
     // track.OutputPassingTime("Backward Pass");
@@ -1702,6 +1706,8 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
             cur_xu_vecs[k].block<CONTROL_DIM, 1>(STATE_DIM, 0);
         xu_vecs[k].block<CONTROL_DIM, 1>(STATE_DIM, 0) =
             K_mats[k] * (x_hat_vecs[k] - x) + alpha * k_vecs[k] + u;
+        // Naive clamp.
+        xu_vecs[k](18) = std::max(xu_vecs[k](18), kMinTimeStep);
         xu_vecs[k].block<STATE_DIM, 1>(0, 0) = x_hat_vecs[k];
         x_hat_vecs[k + 1] = GetRealTransition(xu_vecs[k]);
         // Calculate the new cost.
@@ -1730,17 +1736,27 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
       const float ratio_decrease =
           (next_cost_sum - cost_sum) /
           (alpha * (delta_V.first + alpha * delta_V.second));
-      if (line_search_iter < kMaxLineSearchIter &&
-          (ratio_decrease <= 1e-4 || ratio_decrease >= 10.0f)) {
+      if (ratio_decrease <= 1e-4 || ratio_decrease >= 10.0f) {
         alpha *= 0.5f;
       } else {
         is_line_search_done = true;
         cost_sum = next_cost_sum;
-        std::cout << "state cost: " << state_cost << " time cost: " << time_cost
-                  << " smooth cost: " << smooth_cost << std::endl;
+        std::cout << " state cost: " << state_cost << std::endl
+                  << " time cost: " << time_cost << std::endl
+                  << " smooth cost: " << smooth_cost << std::endl
+                  << "";
+        // Decrease the regularization coefficient.
+        reg_coeff /= kRegularizationScale;
       }
     }
     // track.OutputPassingTime("Forward Pass");
+    if (!is_line_search_done) {
+      // Increase the regularization coefficient.
+      xu_vecs = cur_xu_vecs;
+      reg_coeff *= kRegularizationScale;
+      std::cout << "Line search failed !" << std::endl;
+      continue;
+    }
 
     // Calculate the path length.
     path_length = 0.0f;
@@ -2032,10 +2048,10 @@ DynamicVoronoi3D::GetTrajCost(const Eigen::Matrix<float, ALL_DIM, 1> &xu,
   float dc_dt = kTimeWeight * (dt - kMinTimeStep);
   float ddc_dt = kTimeWeight;
   // Time constraint.
-  if (dt < kMinTimeStep) {
-    dc_dt += kTimeBndWeight * (dt - kMinTimeStep);
-    ddc_dt += kTimeBndWeight;
-  }
+  // if (dt < kMinTimeStep) {
+  //   dc_dt += kTimeBndWeight * (dt - kMinTimeStep);
+  //   ddc_dt += kTimeBndWeight;
+  // }
   time_cost.first = Eigen::Matrix<float, ALL_DIM, ALL_DIM>::Zero();
   time_cost.first(ALL_DIM - 1, ALL_DIM - 1) = ddc_dt;
   time_cost.second = Eigen::Matrix<float, ALL_DIM, 1>::Zero();
@@ -2265,10 +2281,10 @@ RealCostOutput DynamicVoronoi3D::GetTrajRealCost(
   }
 
   // Time constraint.
-  if (dt < kMinTimeStep) {
-    time_cost +=
-        kTimeBndWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep);
-  }
+  // if (dt < kMinTimeStep) {
+  //   time_cost +=
+  //       kTimeBndWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep);
+  // }
   // Time cost.
   time_cost += kTimeWeight * 0.5f * (dt - kMinTimeStep) * (dt - kMinTimeStep);
 
