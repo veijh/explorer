@@ -713,6 +713,7 @@ int main(int argc, char *argv[]) {
     // Use iLQR to refine the path.
     track.SetStartTime();
     iLQROutput ilqr_output = voronoi.GetiLQRPath(path);
+    track.OutputPassingTime("GetiLQRPath");
     if (LOG_OUTPUT) {
       outFile << "iLQR Path Time, " << track.OutputPassingTime("GetiLQRPath")
               << std::endl;
