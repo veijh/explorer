@@ -29,7 +29,7 @@ constexpr float kTrajConvergenceThreshold = 1.0f;
 constexpr float kTrajTermWeight = 10.0f;
 constexpr float kTrajBndWeight = 1.0f;
 constexpr float kTimeBndWeight = 1.0f;
-constexpr float kSmoothWeight = 0.1f;
+constexpr float kSmoothWeight = 0.05f;
 constexpr float kTimeWeight = 1.0f;
 // Rgularization parameters.
 constexpr float kRegularization = 0.1f;
@@ -1562,10 +1562,10 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
   // // clang-format on
 
   // Output the initial guess.
-  for (int i = 0; i < num_steps; ++i) {
-    std::cout << "xu_vecs[" << i << "]: " << xu_vecs[i].transpose()
-              << std::endl;
-  }
+  // for (int i = 0; i < num_steps; ++i) {
+  //   std::cout << "xu_vecs[" << i << "]: " << xu_vecs[i].transpose()
+  //             << std::endl;
+  // }
 
   // Calculate the coefficents.
   std::cout << "start ilqr optimization..." << std::endl;
@@ -1741,10 +1741,10 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
       } else {
         is_line_search_done = true;
         cost_sum = next_cost_sum;
-        std::cout << " state cost: " << state_cost << std::endl
-                  << " time cost: " << time_cost << std::endl
-                  << " smooth cost: " << smooth_cost << std::endl
-                  << "";
+        // std::cout << " state cost: " << state_cost << std::endl
+        //           << " time cost: " << time_cost << std::endl
+        //           << " smooth cost: " << smooth_cost << std::endl
+        //           << "";
         // Decrease the regularization coefficient.
         reg_coeff /= kRegularizationScale;
       }
@@ -1754,7 +1754,7 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
       // Increase the regularization coefficient.
       xu_vecs = cur_xu_vecs;
       reg_coeff *= kRegularizationScale;
-      std::cout << "Line search failed !" << std::endl;
+      // std::cout << "Line search failed !" << std::endl;
       continue;
     }
 
@@ -1784,20 +1784,21 @@ DynamicVoronoi3D::GetiLQRTrajectory(const std::vector<IntPoint3D> &path,
       last_path_length = path_length;
       last_cost_sum = cost_sum;
       last_time_sum = time_sum;
-      std::cout << "iter: " << iter << " line search iter: " << line_search_iter
-                << " cost: " << cost_sum << " path_length: " << path_length
-                << " time_sum: " << time_sum << std::endl;
+      // std::cout << "iter: " << iter << " line search iter: " <<
+      // line_search_iter
+      //           << " cost: " << cost_sum << " path_length: " << path_length
+      //           << " time_sum: " << time_sum << std::endl;
     }
   }
 
   // Output the trajectory.
-  std::cout << std::fixed << std::setprecision(4);
-  for (int i = 0; i < num_steps; ++i) {
-    for (int j = 0; j < xu_vecs[i].rows(); ++j) {
-      std::cout << std::setw(10) << xu_vecs[i](j); // 设置宽度为10
-    }
-    std::cout << std::endl;
-  }
+  // std::cout << std::fixed << std::setprecision(4);
+  // for (int i = 0; i < num_steps; ++i) {
+  //   for (int j = 0; j < xu_vecs[i].rows(); ++j) {
+  //     std::cout << std::setw(10) << xu_vecs[i](j); // 设置宽度为10
+  //   }
+  //   std::cout << std::endl;
+  // }
   ilqr_traj.traj = std::move(xu_vecs);
   return ilqr_traj;
 }
