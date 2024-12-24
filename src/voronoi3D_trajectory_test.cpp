@@ -616,8 +616,10 @@ int main(int argc, char *argv[]) {
   const int start_index_x = (start_pt.x() - min_x) / resolution;
   const int start_index_y = (start_pt.y() - min_y) / resolution;
   const int start_index_z = (start_pt.z() - min_z) / resolution;
-  outFile << "Start, " << start_pt.x() << ", " << start_pt.y() << ", "
-          << start_pt.z() << std::endl;
+  if (LOG_OUTPUT) {
+    outFile << "Start, " << start_pt.x() << ", " << start_pt.y() << ", "
+            << start_pt.z() << std::endl;
+  }
   if (grid[start_index_x][start_index_y][start_index_z] ==
       GridAstar::GridState::kOcc) {
     return 0;
@@ -652,7 +654,7 @@ int main(int argc, char *argv[]) {
     return 0;
   }
   // Eigen::Vector3f end_pt = end_pts[count];
-  Eigen::Vector3f end_pt = {-20.0, -20.0, 7.5};
+  Eigen::Vector3f end_pt = {20.0, 20.0, 1.5};
   ++count;
 
   const int end_index_x = (end_pt.x() - min_x) / resolution;
