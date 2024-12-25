@@ -184,6 +184,7 @@ add_executable(create_s3dis_map_test src/create_s3dis_map_test.cpp)
 add_executable(create_building_test src/create_building_test.cpp)
 add_executable(voronoi_test src/voronoi_test.cpp)
 add_executable(voronoi3D_test src/voronoi3D_test.cpp)
+add_executable(voronoi3D_trajectory_test src/voronoi3D_trajectory_test.cpp)
 add_executable(voronoi2DS_test src/voronoi2DS_test.cpp)
 
 ## Rename C++ executable without prefix
@@ -260,6 +261,14 @@ target_link_libraries(voronoi_test
 )
 
 target_link_libraries(voronoi3D_test
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}_lib
+  ${Boost_LIBRARIES}
+  ${PROJECT_NAME}_voronoi_lib
+  ${PROJECT_NAME}_block_lib
+)
+
+target_link_libraries(voronoi3D_trajectory_test
   ${catkin_LIBRARIES}
   ${PROJECT_NAME}_lib
   ${Boost_LIBRARIES}
