@@ -913,31 +913,6 @@ void DynamicVoronoi3D::ConstructSparseGraphBK() {
             << std::endl;
 }
 
-void DynamicVoronoi3D::SparseAddTwoWayEdge(const IntPoint3D &core,
-                                           const IntPoint3D &add,
-                                           const float weight) {
-  // Edges cannot get close to each other.
-  bool can_add_edge = true;
-  if (graph_.node_id_.find(core) == graph_.node_id_.end()) {
-    graph_.AddTwoWayEdge(core, add, weight);
-  } else {
-    const int core_id = graph_.node_id_[core];
-    for (const auto &edge : graph_.nodes_[core_id].edges_) {
-      const IntPoint3D dst_point = graph_.nodes_[edge.first].point_;
-      const float dst_to_point = GetDistanceBetween(add, dst_point);
-      const float dst_obstacle_dist =
-          getDistance(dst_point.x, dst_point.y, dst_point.z);
-      if (dst_to_point < dst_obstacle_dist) {
-        can_add_edge = false;
-        break;
-      }
-    }
-    if (can_add_edge) {
-      graph_.AddTwoWayEdge(core, add, weight);
-    }
-  }
-}
-
 AstarOutput DynamicVoronoi3D::GetAstarPath(const IntPoint3D &start,
                                            const IntPoint3D &goal) {
   AstarOutput output;
