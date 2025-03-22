@@ -44,6 +44,7 @@ tf2_ros::Buffer tf_buffer;
 using namespace std;
 
 int self_id = 0;
+int uav_num = 0;
 
 octomap::OcTree *ocmap = nullptr;
 void octomap_cb(const octomap_msgs::Octomap::ConstPtr &msg) {
@@ -166,6 +167,8 @@ int main(int argc, char **argv) {
   ros::Duration(1.0).sleep();  // 等待tf2变换树准备好
   ros::Rate rate(5);
 
+  nh.getParam("uav_num", uav_num);
+
   // frontier voxels display
   ros::Publisher frontier_maker_array_pub =
       nh.advertise<visualization_msgs::MarkerArray>("frontier", 10);
@@ -276,7 +279,7 @@ int main(int argc, char **argv) {
     vector<geometry_msgs::PointStamped> other_uav_poses;
     geometry_msgs::PointStamped other_uav(cam_o_in_cam);
     geometry_msgs::PointStamped other_uav_in_map;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < uav_num; ++i) {
       if (i != self_id) {
         other_uav.header.frame_id =
             "uav" + to_string(i) + "_camera_depth_frame";

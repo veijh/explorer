@@ -6,16 +6,16 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/transform_listener.h>
+
 #include <vector>
 
 using namespace std;
 tf2_ros::Buffer tf_buffer;
-const int uav_num = 3;
+int uav_num = 0;
 
 void merge_octomap(octomap::OcTree *const from, octomap::OcTree *const to,
                    const int &id) {
-  if (from == nullptr || to == nullptr)
-    return;
+  if (from == nullptr || to == nullptr) return;
   // Expand tree2 so we search all nodes
   from->expand();
 
@@ -45,7 +45,6 @@ void merge_octomap(octomap::OcTree *const from, octomap::OcTree *const to,
            it = from->begin_leafs_bbx(check_bbx_min, check_bbx_max),
            end = from->end_leafs_bbx();
        it != end; ++it) {
-
     // find if the current node maps a point in map1
     octomap::point3d point = it.getCoordinate();
     octomap::OcTreeNode *nodeIn1 = to->search(point);
@@ -82,8 +81,9 @@ void merge_octomap(octomap::OcTree *const from, octomap::OcTree *const to,
               uav_in_map.point.x + x_offset, uav_in_map.point.y + y_offset,
               uav_in_map.point.z + z_offset);
           if (nodeIn1 != NULL) {
-            to->updateNode(uav_in_map.point.x + x_offset, uav_in_map.point.y + y_offset,
-              uav_in_map.point.z + z_offset, false);
+            to->updateNode(uav_in_map.point.x + x_offset,
+                           uav_in_map.point.y + y_offset,
+                           uav_in_map.point.z + z_offset, false);
           }
         }
       }
@@ -92,10 +92,10 @@ void merge_octomap(octomap::OcTree *const from, octomap::OcTree *const to,
 }
 
 class MapMerge {
-private:
+ private:
   int uav_id_;
 
-public:
+ public:
   static octomap::OcTree *ocmap;
   MapMerge(int uav_id) : uav_id_(uav_id){};
   void operator()(const octomap_msgs::Octomap::ConstPtr &msg) {
@@ -117,8 +117,10 @@ int main(int argc, char **argv) {
   ros::NodeHandle nh("");
 
   tf2_ros::TransformListener tf_listener(tf_buffer);
-  ros::Duration(1.0).sleep(); // 等待tf2变换树准备好
+  ros::Duration(1.0).sleep();  // 等待tf2变换树准备好
   ros::Rate rate(10);
+
+  nh.getParam("uav_num", uav_num);
 
   ros::Publisher octomap_pub =
       nh.advertise<octomap_msgs::Octomap>("/merged_map", 10);

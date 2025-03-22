@@ -1,14 +1,21 @@
 <launch>
+    <arg name="uav_num" default="5"/>
+    <param name="uav_num" value="$(arg uav_num)"/>
     <node name="map_merge" pkg="explorer" type="map_merge" respawn="false" output="screen"/>
+    
     <include file="$(find explorer)/launch/single_explorer.launch">
         <arg name="ID" value="0"/>
+        <arg name="uav_num" value="$(arg uav_num)"/>
     </include>
 
     <include file="$(find explorer)/launch/single_explorer.launch">
         <arg name="ID" value="1"/>
+        <arg name="uav_num" value="$(arg uav_num)"/>
     </include>
 
     <include file="$(find explorer)/launch/single_explorer.launch">
         <arg name="ID" value="2"/>
+        <arg name="uav_num" value="$(arg uav_num)"/>
     </include>
+
 </launch>
