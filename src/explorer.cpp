@@ -1,12 +1,3 @@
-#include "explorer/Traj.h"
-#include "explorer/frontier_cluster.h"
-#include "explorer/frontier_detector.h"
-#include "explorer/hastar.h"
-#include "explorer/path_planning.h"
-#include "explorer/time_track.hpp"
-#include "lkh_ros/Solve.h"
-#include <Eigen/Dense>
-#include <cmath>
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TransformStamped.h>
@@ -17,20 +8,31 @@
 #include <octomap/octomap.h>
 #include <octomap_msgs/Octomap.h>
 #include <octomap_msgs/conversions.h>
-#include <queue>
-#include <random>
 #include <ros/ros.h>
-#include <set>
 #include <std_msgs/Float32MultiArray.h>
-#include <string>
 #include <sys/time.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/transform_listener.h>
+#include <visualization_msgs/MarkerArray.h>
+
+#include <Eigen/Dense>
+#include <cmath>
+#include <queue>
+#include <random>
+#include <set>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <visualization_msgs/MarkerArray.h>
+
+#include "explorer/Traj.h"
+#include "explorer/frontier_cluster.h"
+#include "explorer/frontier_detector.h"
+#include "explorer/hastar.h"
+#include "explorer/path_planning.h"
+#include "explorer/time_track.hpp"
+#include "lkh_ros/Solve.h"
 
 enum CTRL_STATE { VOID = 0, POS_CTRL, YAW_CTRL };
 enum PLAN_FSM { WAIT = 0, PLAN, EXEC };
@@ -161,7 +163,7 @@ int main(int argc, char **argv) {
   double resolution = 0.1, sensor_range = 50.0;
 
   tf2_ros::TransformListener tf_listener(tf_buffer);
-  ros::Duration(1.0).sleep(); // 等待tf2变换树准备好
+  ros::Duration(1.0).sleep();  // 等待tf2变换树准备好
   ros::Rate rate(5);
 
   // frontier voxels display
@@ -281,10 +283,10 @@ int main(int argc, char **argv) {
         try {
           // 使用lookupTransform函数查询坐标变换
           tf_buffer.transform(other_uav, other_uav_in_map, "map");
+          other_uav_poses.emplace_back(other_uav_in_map);
         } catch (tf2::TransformException &ex) {
           ROS_ERROR("Failed to transform point: %s", ex.what());
         }
-        other_uav_poses.emplace_back(other_uav_in_map);
       }
     }
 
@@ -369,83 +371,86 @@ int main(int argc, char **argv) {
           path_id++;
           state = PLAN_FSM::PLAN;
         } else {
-
           switch (state) {
-          case PLAN_FSM::PLAN: {
-            cout << "Searching Path" << endl;
-            tracker.SetStartTime();
-            // Hybrid A* search path
-            bool is_planned = planning.search_path(
-                ocmap,
-                Eigen::Vector3f(cam_o_in_map.point.x, cam_o_in_map.point.y,
-                                1.5),
-                Eigen::Vector3f(explore_path.poses[path_id].position.x,
-                                explore_path.poses[path_id].position.y, 1.5),
-                cur_yaw);
-            tracker.OutputPassingTime("Hybrid A*");
-
-            tracker.SetStartTime();
-            // re-search
-            if (is_planned == false) {
-              is_planned = planning.search_path(
+            case PLAN_FSM::PLAN: {
+              cout << "Searching Path" << endl;
+              tracker.SetStartTime();
+              // Hybrid A* search path
+              bool is_planned = planning.search_path(
                   ocmap,
-                  Eigen::Vector3f(cam_o_in_map.point.x - 0.4 * cos(cur_yaw),
-                                  cam_o_in_map.point.y - 0.4 * sin(cur_yaw),
+                  Eigen::Vector3f(cam_o_in_map.point.x, cam_o_in_map.point.y,
                                   1.5),
                   Eigen::Vector3f(explore_path.poses[path_id].position.x,
                                   explore_path.poses[path_id].position.y, 1.5),
                   cur_yaw);
-            }
-            tracker.OutputPassingTime("Hybrid A* Replan");
+              tracker.OutputPassingTime("Hybrid A*");
 
-            if (is_planned) {
-              // send traj
-              explorer::Traj send_traj;
-              mavros_msgs::PositionTarget target_pose;
-              target_pose.header.frame_id = "map";
-              target_pose.header.stamp = ros::Time::now();
-              target_pose.coordinate_frame =
-                  mavros_msgs::PositionTarget::FRAME_LOCAL_NED; // actually
-                                                                // redundant
-              target_pose.type_mask =
-                  mavros_msgs::PositionTarget::IGNORE_YAW_RATE; // actually
-                                                                // redundant
-              for (int i = 0; i < planning.traj.size(); i++) {
-                target_pose.position.x = planning.traj[i].pos.x();
-                target_pose.position.y = planning.traj[i].pos.y();
-                target_pose.position.z = planning.traj[i].pos.z();
-
-                target_pose.velocity.x = planning.traj[i].vel.x();
-                target_pose.velocity.y = planning.traj[i].vel.y();
-                target_pose.velocity.z = planning.traj[i].vel.z();
-
-                target_pose.acceleration_or_force.x = planning.traj[i].acc.x();
-                target_pose.acceleration_or_force.y = planning.traj[i].acc.y();
-                target_pose.acceleration_or_force.z = planning.traj[i].acc.z();
-
-                target_pose.yaw = planning.traj[i].yaw;
-                target_pose.yaw_rate = planning.traj[i].yaw_rate;
-                send_traj.traj.push_back(target_pose);
+              tracker.SetStartTime();
+              // re-search
+              if (is_planned == false) {
+                is_planned = planning.search_path(
+                    ocmap,
+                    Eigen::Vector3f(cam_o_in_map.point.x - 0.4 * cos(cur_yaw),
+                                    cam_o_in_map.point.y - 0.4 * sin(cur_yaw),
+                                    1.5),
+                    Eigen::Vector3f(explore_path.poses[path_id].position.x,
+                                    explore_path.poses[path_id].position.y,
+                                    1.5),
+                    cur_yaw);
               }
+              tracker.OutputPassingTime("Hybrid A* Replan");
 
-              // set target yaw at end_p
-              target_pose.yaw = target_yaw;
-              send_traj.traj.push_back(target_pose);
+              if (is_planned) {
+                // send traj
+                explorer::Traj send_traj;
+                mavros_msgs::PositionTarget target_pose;
+                target_pose.header.frame_id = "map";
+                target_pose.header.stamp = ros::Time::now();
+                target_pose.coordinate_frame =
+                    mavros_msgs::PositionTarget::FRAME_LOCAL_NED;  // actually
+                                                                   // redundant
+                target_pose.type_mask =
+                    mavros_msgs::PositionTarget::IGNORE_YAW_RATE;  // actually
+                                                                   // redundant
+                for (int i = 0; i < planning.traj.size(); i++) {
+                  target_pose.position.x = planning.traj[i].pos.x();
+                  target_pose.position.y = planning.traj[i].pos.y();
+                  target_pose.position.z = planning.traj[i].pos.z();
 
-              traj_pub.publish(send_traj);
-              state = PLAN_FSM::EXEC;
+                  target_pose.velocity.x = planning.traj[i].vel.x();
+                  target_pose.velocity.y = planning.traj[i].vel.y();
+                  target_pose.velocity.z = planning.traj[i].vel.z();
+
+                  target_pose.acceleration_or_force.x =
+                      planning.traj[i].acc.x();
+                  target_pose.acceleration_or_force.y =
+                      planning.traj[i].acc.y();
+                  target_pose.acceleration_or_force.z =
+                      planning.traj[i].acc.z();
+
+                  target_pose.yaw = planning.traj[i].yaw;
+                  target_pose.yaw_rate = planning.traj[i].yaw_rate;
+                  send_traj.traj.push_back(target_pose);
+                }
+
+                // set target yaw at end_p
+                target_pose.yaw = target_yaw;
+                send_traj.traj.push_back(target_pose);
+
+                traj_pub.publish(send_traj);
+                state = PLAN_FSM::EXEC;
+              }
+              break;
             }
-            break;
-          }
 
-          case PLAN_FSM::EXEC: {
-            if (delta.norm() < 0.2 &&
-                abs(target_yaw - cur_yaw) < 5.0 * M_PI / 180.0) {
-              path_id++;
-              state = PLAN_FSM::PLAN;
+            case PLAN_FSM::EXEC: {
+              if (delta.norm() < 0.2 &&
+                  abs(target_yaw - cur_yaw) < 5.0 * M_PI / 180.0) {
+                path_id++;
+                state = PLAN_FSM::PLAN;
+              }
+              break;
             }
-            break;
-          }
           }
         }
       }
